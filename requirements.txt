@@ -1,4 +1,5 @@
 fastapi
+python-binance
 uvicorn
 pandas
 flask==3.0.3
