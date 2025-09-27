@@ -3,5 +3,6 @@ uvicorn
 pandas
 flask==3.0.3
 numpy
+gunicorn
 python-dotenv # For managing environment variables
 requests # For making HTTP requests to APIs
