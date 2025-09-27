@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 pandas
+flask==3.0.3
 numpy
-ta-lib==0.4.28 # For technical indicators - requires C compiler to install
 python-dotenv # For managing environment variables
 requests # For making HTTP requests to APIs
