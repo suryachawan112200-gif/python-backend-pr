@@ -1,10 +1,12 @@
-from flask import Flask, request, jsonify
+# main.py (complete backend code with FastAPI integration)
+
 import json
 import random
 from binance.client import Client
 import pandas as pd
-
-app = Flask(__name__)
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Optional
 
 # ========= Initialize Binance Client with user keys =========
 API_KEY = '3667744fdce537a164763cf22e77510b3a2a1159a97da6ba92a3eb1b5188470d'
@@ -26,10 +28,11 @@ class InputValidator:
         if data["market"] not in ["spot", "futures"]:
             raise ValueError("Market must be 'spot' or 'futures'")
         data["position_type"] = data["position_type"].lower().strip()
-        data["has_both_positions"] = data.get("has_both_positions", False)
+        data["has_both_positions"] = data.get("has_both_positions", False)  # New optional field
         return data
 
 # ========= Binance Data Fetch =========
+
 def get_all_coins():
     spot_symbols = []
     futures_symbols = []
@@ -53,6 +56,13 @@ def get_current_price(coin, market):
         ticker = client.futures_symbol_ticker(symbol=coin)
     return float(ticker['price'])
 
+def get_current_price(coin, market):
+    if market == "spot":
+        ticker = client.get_symbol_ticker(symbol=coin)
+    else:
+        ticker = client.futures_symbol_ticker(symbol=coin)
+    return float(ticker['price'])
+
 def get_ohlcv_df(coin, interval, lookback, market):
     if market == "spot":
         klines = client.get_historical_klines(coin, interval, lookback)
@@ -68,7 +78,8 @@ def get_ohlcv_df(coin, interval, lookback, market):
     df['volume'] = df['volume'].astype(float)
     return df[['open', 'high', 'low', 'close', 'volume']]
 
-# ========= Indicator & Analysis Helpers =========
+# ========= Indicator & Analysis Helpers ==========
+
 def compute_ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
 
@@ -78,7 +89,7 @@ def compute_ma(series, window):
 def compute_atr(df, period=14):
     tr = pd.concat([df['high'] - df['low'], (df['high'] - df['close'].shift()).abs(), (df['low'] - df['close'].shift()).abs()], axis=1).max(axis=1)
     atr = tr.rolling(period).mean()
-    return atr.iloc[-1] if not atr.empty else 0.001
+    return atr.iloc[-1]
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -88,7 +99,7 @@ def compute_rsi(series, period=14):
     avg_loss = loss.rolling(period).mean()
     rs = avg_gain / avg_loss
     rsi = 100 - 100 / (1 + rs)
-    return rsi.iloc[-1] if not rsi.empty else 50
+    return rsi.iloc[-1]
 
 def compute_macd(series, fast=12, slow=26, signal=9):
     ema_fast = compute_ema(series, fast)
@@ -98,7 +109,7 @@ def compute_macd(series, fast=12, slow=26, signal=9):
     histogram = macd - signal_line
     return macd.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]
 
-def detect_support_resistance(df, window=10, lookback=672, tol=0.002):
+def detect_support_resistance(df, window=5, lookback=90, tol=0.001):
     df_close = df['close']
     lows = df['low'].rolling(window, center=True).min()
     highs = df['high'].rolling(window, center=True).max()
@@ -115,9 +126,9 @@ def detect_support_resistance(df, window=10, lookback=672, tol=0.002):
     resistances = [r for r in candidate_resistances if resistance_counts[r] >= 2]
 
     if not supports:
-        supports = sorted(candidate_supports)[:2] if candidate_supports else [df_close.iloc[-1] * 0.95]
+        supports = sorted(candidate_supports)
     if not resistances:
-        resistances = sorted(candidate_resistances)[:2] if candidate_resistances else [df_close.iloc[-1] * 1.05]
+        resistances = sorted(candidate_resistances)
 
     supports.sort()
     resistances.sort()
@@ -279,8 +290,6 @@ def detect_chart_patterns(df):
 
         if abs(t2 - t1) / df_close.mean() < 0.01 and p2 < p1:
             patterns.append("Descending Triangle")
-            height = p1 - t2
-            pattern_targets["Descending Triangle"] = t2 - height
 
         if p2 < p1 and t2 > t1:
             patterns.append("Symmetrical Triangle")
@@ -288,7 +297,7 @@ def detect_chart_patterns(df):
         if p2 < p1 and t2 < t1:
             if abs(slope_peak - slope_trough) < 0.001:
                 patterns.append("Descending Channel")
-            elif p1 - t1 > p2 - t2:
+            elif p1 - t1 > p2 - t2:  # converging
                 patterns.append("Falling Wedge")
                 height = p1 - t1
                 pattern_targets["Falling Wedge"] = df_close.iloc[-1] + height
@@ -296,7 +305,7 @@ def detect_chart_patterns(df):
         if p2 > p1 and t2 > t1:
             if abs(slope_peak - slope_trough) < 0.001:
                 patterns.append("Ascending Channel")
-            elif p2 - t2 < p1 - t1:
+            elif p2 - t2 < p1 - t1:  # converging
                 patterns.append("Rising Wedge")
                 height = p1 - t1
                 pattern_targets["Rising Wedge"] = df_close.iloc[-1] - height
@@ -304,6 +313,7 @@ def detect_chart_patterns(df):
     return patterns, pattern_targets
 
 # ========= Analysis Engine =========
+
 class AnalysisEngine:
     bullish_candles = ["Hammer", "Inverted Hammer", "Bullish Engulfing", "Piercing Line", "Morning Star", "Bullish Harami", "Three White Soldiers", "Tweezer Bottom", "Bullish Belt Hold", "Bullish Marubozu"]
     bearish_candles = ["Shooting Star", "Hanging Man", "Bearish Engulfing", "Dark Cloud Cover", "Evening Star", "Bearish Harami", "Three Black Crows", "Tweezer Top", "Bearish Belt Hold", "Bearish Marubozu"]
@@ -353,11 +363,6 @@ class AnalysisEngine:
             bullish_score += 1
         if bearish_pattern:
             bearish_score += 1
-
-        if bullish_pattern and any(p in AnalysisEngine.bullish_charts for p in detected_charts):
-            bullish_score += 2
-        if bearish_pattern and any(p in AnalysisEngine.bearish_charts for p in detected_charts):
-            bearish_score += 2
 
         if bullish_score > bearish_score:
             dominant_bias = "long"
@@ -449,7 +454,7 @@ class AnalysisEngine:
                 multiplier = 0.5
                 extra_conf = -10
                 pattern_comment += " Bullish patterns detected, tightening range and decreasing confidence."
-        else:
+        else:  # neutral
             multiplier = 0.75
             extra_conf = -5
             pattern_comment += " Neutral trend; using tighter ranges."
@@ -457,56 +462,12 @@ class AnalysisEngine:
         return multiplier, extra_conf, pattern_comment
 
     @staticmethod
-    def target_stoploss(position_type, supports, resistances, entry_price, pattern_targets, atr, current_price, max_diff=0.005):
+    def target_stoploss(dominant_bias, supports, resistances, entry_price, pattern_targets, atr, current_price, max_diff=100):
         targets = []
-        stoplosses_target = []
-        stoplosses_market = []
-        risk_reward_ratio = 1.5  # Risk-reward ratio for target-based SL (1:1.5)
-
-        if position_type == "short":
-            potential_tgts = sorted([s for s in supports if s < entry_price], reverse=True)
-            potential_sls = sorted([r for r in resistances if r > entry_price])
-            # Targets
-            if potential_tgts:
-                tgt1 = potential_tgts[0]
-                targets.append(tgt1)
-                for t in potential_tgts[1:]:
-                    if tgt1 - t <= max_diff:
-                        targets.append(t)
-                        break
-            else:
-                tgt1 = max(0.0001, entry_price - atr * 2)
-                targets.append(tgt1)
-                tgt2 = max(0.0001, entry_price - atr * 4)
-                targets.append(tgt2)
-            # Target-based SL: proportional to the distance to the first target
-            if targets:
-                target_distance = entry_price - targets[0]
-                sl_target = entry_price + target_distance / risk_reward_ratio
-                # Snap to nearest resistance if within tolerance
-                tol = atr * 0.3
-                close_resistances = [r for r in potential_sls if abs(r - sl_target) < tol]
-                stoplosses_target.append(min(close_resistances) if close_resistances else sl_target)
-            # Market-based SL: nearest resistance
-            if potential_sls:
-                sl_market = potential_sls[0]
-                stoplosses_market.append(sl_market)
-                for s in potential_sls[1:]:
-                    if s - sl_market <= max_diff:
-                        stoplosses_market.append(s)
-                        break
-            else:
-                sl_market = entry_price + atr * 2
-                stoplosses_market.append(sl_market)
-            # Add pattern target if bearish
-            for pat, ptgt in pattern_targets.items():
-                if pat in AnalysisEngine.bearish_charts and ptgt < entry_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
-                    if len(targets) < 2 and (targets and abs(ptgt - targets[0]) <= max_diff * 1.5):
-                        targets.append(ptgt)
-        elif position_type == "long":
+        stoplosses = []
+        if dominant_bias == "long":
             potential_tgts = sorted([r for r in resistances if r > entry_price])
             potential_sls = sorted([s for s in supports if s < entry_price], reverse=True)
-            # Targets
             if potential_tgts:
                 tgt1 = potential_tgts[0]
                 targets.append(tgt1)
@@ -519,58 +480,80 @@ class AnalysisEngine:
                 targets.append(tgt1)
                 tgt2 = entry_price + atr * 4
                 targets.append(tgt2)
-            # Target-based SL
-            if targets:
-                target_distance = targets[0] - entry_price
-                sl_target = entry_price - target_distance / risk_reward_ratio
-                tol = atr * 0.3
-                close_supports = [s for s in potential_sls if abs(s - sl_target) < tol]
-                stoplosses_target.append(max(close_supports) if close_supports else max(0.0001, sl_target))
-            # Market-based SL
             if potential_sls:
-                sl_market = potential_sls[0]
-                stoplosses_market.append(sl_market)
+                sl1 = potential_sls[0]
+                stoplosses.append(sl1)
                 for s in potential_sls[1:]:
-                    if sl_market - s <= max_diff:
-                        stoplosses_market.append(s)
+                    if sl1 - s <= max_diff:
+                        stoplosses.append(s)
                         break
             else:
-                sl_market = max(0.0001, entry_price - atr * 2)
-                stoplosses_market.append(sl_market)
+                sl1 = entry_price - atr * 2
+                stoplosses.append(sl1)
             # Add pattern target if bullish
             for pat, ptgt in pattern_targets.items():
                 if pat in AnalysisEngine.bullish_charts and ptgt > entry_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
                     if len(targets) < 2 and (targets and abs(ptgt - targets[0]) <= max_diff * 1.5):
                         targets.append(ptgt)
-        else:
+        elif dominant_bias == "short":
+            potential_tgts = sorted([s for s in supports if s < entry_price], reverse=True)
+            potential_sls = sorted([r for r in resistances if r > entry_price])
+            if potential_tgts:
+                tgt1 = potential_tgts[0]
+                targets.append(tgt1)
+                for t in potential_tgts[1:]:
+                    if tgt1 - t <= max_diff:
+                        targets.append(t)
+                        break
+            else:
+                tgt1 = entry_price - atr * 2
+                targets.append(tgt1)
+                tgt2 = entry_price - atr * 4
+                targets.append(tgt2)
+            if potential_sls:
+                sl1 = potential_sls[0]
+                stoplosses.append(sl1)
+                for s in potential_sls[1:]:
+                    if s - sl1 <= max_diff:
+                        stoplosses.append(s)
+                        break
+            else:
+                sl1 = entry_price + atr * 2
+                stoplosses.append(sl1)
+            # Add pattern target if bearish
+            for pat, ptgt in pattern_targets.items():
+                if pat in AnalysisEngine.bearish_charts and ptgt < entry_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
+                    if len(targets) < 2 and (targets and abs(ptgt - targets[0]) <= max_diff * 1.5):
+                        targets.append(ptgt)
+        else:  # neutral
             nearest_support = min(supports, key=lambda s: abs(s - current_price)) if supports else current_price - atr
             nearest_resistance = min(resistances, key=lambda r: abs(r - current_price)) if resistances else current_price + atr
             targets = [nearest_resistance] if nearest_resistance > current_price else [nearest_support]
-            stoplosses_target = [nearest_support] if nearest_support < current_price else [nearest_resistance]
-            stoplosses_market = stoplosses_target
+            stoplosses = [nearest_support] if nearest_support < current_price else [nearest_resistance]
 
-        return sorted(targets, reverse=(position_type == "short")), sorted(stoplosses_target), sorted(stoplosses_market)
+        return sorted(targets), sorted(stoplosses)
 
     @staticmethod
-    def calculate_user_sl(position_type, entry_price, supports, resistances, atr):
-        risk_pct = random.choice([0.05, 0.10, 0.15, 0.20])
-        tol = atr * 0.3
-        if position_type == "short":
-            user_sl_raw = entry_price * (1 + risk_pct)
-            close_levels = [r for r in resistances if abs(r - user_sl_raw) < tol and r > entry_price]
-            if close_levels:
-                return min(close_levels)
-            return user_sl_raw
-        elif position_type == "long":
+    def calculate_user_sl(dominant_bias, entry_price, supports, resistances, atr):
+        risk_pct = random.choice([0.20, 0.25, 0.30, 0.35])
+        tol = atr
+        if dominant_bias == "long":
             user_sl_raw = entry_price * (1 - risk_pct)
             close_levels = [s for s in supports if abs(s - user_sl_raw) < tol and s < entry_price]
             if close_levels:
-                return max(close_levels)
-            return max(0.0001, user_sl_raw)
-        else:
-            return entry_price * (1 - 0.05)
+                return max(close_levels)  # highest for less risk
+            return user_sl_raw
+        elif dominant_bias == "short":
+            user_sl_raw = entry_price * (1 + risk_pct)
+            close_levels = [r for r in resistances if abs(r - user_sl_raw) < tol and r > entry_price]
+            if close_levels:
+                return min(close_levels)  # lowest for less risk
+            return user_sl_raw
+        else:  # neutral
+            return entry_price * (1 - 0.1)  # Conservative 10% risk
 
 # ========= Main Pipeline =========
+
 def advisory_pipeline(input_json):
     data = InputValidator.validate_and_normalize(input_json)
 
@@ -579,7 +562,7 @@ def advisory_pipeline(input_json):
         info = client.get_symbol_info(data["coin"])
         if info is None:
             raise ValueError("Coin not found or invalid symbol on Binance spot market!")
-    else:
+    else:  # futures
         futures_info = client.futures_exchange_info()
         futures_symbols = [s['symbol'] for s in futures_info['symbols'] if s['status'] == 'TRADING']
         if data["coin"] not in futures_symbols:
@@ -588,10 +571,8 @@ def advisory_pipeline(input_json):
 
     current_price = get_current_price(data["coin"], data["market"])
     df_1d = get_ohlcv_df(data["coin"], Client.KLINE_INTERVAL_1DAY, "6 months ago UTC", data["market"])
-    df_15m = get_ohlcv_df(data["coin"], Client.KLINE_INTERVAL_15MINUTE, "7 days ago UTC", data["market"])
 
-    atr_1d = compute_atr(df_1d)
-    atr_15m = compute_atr(df_15m)
+    atr = compute_atr(df_1d)
 
     detected_candles = detect_candlestick_patterns(df_1d)
     detected_charts, pattern_targets = detect_chart_patterns(df_1d)
@@ -602,6 +583,7 @@ def advisory_pipeline(input_json):
 
     dominant_bias, trend_extra_conf, trend_pattern_comment = AnalysisEngine.determine_dominant_trend(df_1d, detected_candles, detected_charts)
 
+    # If user has both positions, force to dominant bias
     if data["has_both_positions"]:
         analysis_bias = dominant_bias
         warning = f"Since you have both positions, analyzing based on dominant trend ({dominant_bias}). Consider closing the opposing position."
@@ -611,16 +593,16 @@ def advisory_pipeline(input_json):
         if dominant_bias != "neutral" and dominant_bias != data["position_type"]:
             warning = f"Your {data['position_type']} position opposes the {dominant_bias} trend—consider exiting to align with market momentum."
 
-    multiplier, extra_conf, pattern_comment = AnalysisEngine.adjust_based_on_patterns(dominant_bias, detected_candles, detected_charts, trend_conf, df_1d, atr_1d)
+    multiplier, extra_conf, pattern_comment = AnalysisEngine.adjust_based_on_patterns(analysis_bias, detected_candles, detected_charts, trend_conf, df_1d, atr)
 
-    tol = atr_15m * 0.3
-    supports, resistances = detect_support_resistance(df_15m, window=10, lookback=672, tol=tol)
+    tol = atr * 0.5
+    supports, resistances = detect_support_resistance(df_1d, tol=tol)
 
-    max_diff = atr_15m * 4
+    max_diff = atr * 5  # adaptive to volatility
 
-    targets, stoplosses_target, stoplosses_market = AnalysisEngine.target_stoploss(data["position_type"], supports, resistances, data["entry_price"], pattern_targets, atr_15m, current_price, max_diff=max_diff)
+    targets, stoplosses = AnalysisEngine.target_stoploss(analysis_bias, supports, resistances, data["entry_price"], pattern_targets, atr, current_price, max_diff=max_diff)
 
-    user_sl = AnalysisEngine.calculate_user_sl(data["position_type"], data["entry_price"], supports, resistances, atr_15m)
+    user_sl = AnalysisEngine.calculate_user_sl(analysis_bias, data["entry_price"], supports, resistances, atr)
 
     recommended_action = "Go long" if dominant_bias == "long" else "Go short" if dominant_bias == "short" else "Stay neutral/avoid new positions"
 
@@ -643,8 +625,7 @@ def advisory_pipeline(input_json):
             "chart_patterns": detected_charts
         },
         "targets": targets,
-        "market_stoplosses_target": stoplosses_target,
-        "market_stoplosses_market": stoplosses_market,
+        "market_stoplosses": stoplosses,
         "user_stoploss": user_sl,
         "confidence_level": (trend_conf + trend_extra_conf + extra_conf + 80) // 2,
         "recommended_action": recommended_action,
@@ -652,17 +633,28 @@ def advisory_pipeline(input_json):
     }
     return output
 
-# ========= Flask API Endpoint =========
-@app.route('/analyze', methods=['POST'])
-def analyze():
-    try:
-        input_json = request.get_json(force=True)
-        result = advisory_pipeline(input_json)
-        return jsonify(result)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": "An unexpected error occurred: " + str(e)}), 500
+# ========= Input Model for FastAPI =========
+class TradeInput(BaseModel):
+    coin: str
+    market: str
+    entry_price: float
+    quantity: float
+    position_type: str
+    has_both_positions: Optional[bool] = False
 
-if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+# ========= FastAPI App =========
+app = FastAPI()
+
+@app.post("/analyze")
+async def analyze_position(input_data: TradeInput):
+    try:
+        data = input_data.dict()
+        validated_data = InputValidator.validate_and_normalize(data)
+        result = advisory_pipeline(validated_data)
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+# To run: uvicorn main:app --host 0.0.0.0 --port 8000

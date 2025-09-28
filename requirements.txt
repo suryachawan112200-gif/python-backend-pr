@@ -1,9 +1,7 @@
-fastapi
-python-binance
-uvicorn
-pandas
-flask==3.0.3
-numpy
-gunicorn
-python-dotenv # For managing environment variables
-requests # For making HTTP requests to APIs
+binance-connector==1.0.0  # Or the exact package for binance.client
+pandas==2.2.3
+random  # Built-in, no need
+json  # Built-in, no need
+fastapi==0.115.2
+uvicorn==0.31.1
+pydantic==2.9.2
