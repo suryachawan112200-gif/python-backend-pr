@@ -3,3 +3,4 @@ uvicorn==0.31.1
 pydantic==2.9.2
 python-binance==1.0.19
 pandas==2.2.3
+requests==2.32.3
