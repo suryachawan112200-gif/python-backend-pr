@@ -1,7 +1,5 @@
-binance-connector==1.0.0  # Or the exact package for binance.client
-pandas==2.2.3
-random  # Built-in, no need
-json  # Built-in, no need
 fastapi==0.115.2
 uvicorn==0.31.1
 pydantic==2.9.2
+python-binance==1.0.19
+pandas==2.2.3

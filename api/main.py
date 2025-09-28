@@ -1,5 +1,4 @@
-# main.py (complete backend code with FastAPI integration)
-
+import os
 import json
 import random
 from binance.client import Client
@@ -7,14 +6,14 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from fastapi.middleware.cors import CORSMiddleware
 
-# ========= Initialize Binance Client with user keys =========
-API_KEY = '3667744fdce537a164763cf22e77510b3a2a1159a97da6ba92a3eb1b5188470d'
-API_SECRET = 'baca1443f0765a5c5104b14c3eefcb15d714eb41f9b6dcbee3b339863acb7821'
-
+# Initialize Binance Client with environment variables
+API_KEY = os.getenv('API_KEY')
+API_SECRET = os.getenv('API_SECRET')
 client = Client(api_key=API_KEY, api_secret=API_SECRET)
 
-# ========= Input & Validation =========
+# Input & Validation
 class InputValidator:
     REQUIRED_FIELDS = {"coin", "market", "entry_price", "quantity", "position_type"}
 
@@ -28,11 +27,10 @@ class InputValidator:
         if data["market"] not in ["spot", "futures"]:
             raise ValueError("Market must be 'spot' or 'futures'")
         data["position_type"] = data["position_type"].lower().strip()
-        data["has_both_positions"] = data.get("has_both_positions", False)  # New optional field
+        data["has_both_positions"] = data.get("has_both_positions", False)
         return data
 
-# ========= Binance Data Fetch =========
-
+# Binance Data Fetch
 def get_all_coins():
     spot_symbols = []
     futures_symbols = []
@@ -56,13 +54,6 @@ def get_current_price(coin, market):
         ticker = client.futures_symbol_ticker(symbol=coin)
     return float(ticker['price'])
 
-def get_current_price(coin, market):
-    if market == "spot":
-        ticker = client.get_symbol_ticker(symbol=coin)
-    else:
-        ticker = client.futures_symbol_ticker(symbol=coin)
-    return float(ticker['price'])
-
 def get_ohlcv_df(coin, interval, lookback, market):
     if market == "spot":
         klines = client.get_historical_klines(coin, interval, lookback)
@@ -78,8 +69,7 @@ def get_ohlcv_df(coin, interval, lookback, market):
     df['volume'] = df['volume'].astype(float)
     return df[['open', 'high', 'low', 'close', 'volume']]
 
-# ========= Indicator & Analysis Helpers ==========
-
+# Indicator & Analysis Helpers
 def compute_ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
 
@@ -312,8 +302,7 @@ def detect_chart_patterns(df):
 
     return patterns, pattern_targets
 
-# ========= Analysis Engine =========
-
+# Analysis Engine
 class AnalysisEngine:
     bullish_candles = ["Hammer", "Inverted Hammer", "Bullish Engulfing", "Piercing Line", "Morning Star", "Bullish Harami", "Three White Soldiers", "Tweezer Bottom", "Bullish Belt Hold", "Bullish Marubozu"]
     bearish_candles = ["Shooting Star", "Hanging Man", "Bearish Engulfing", "Dark Cloud Cover", "Evening Star", "Bearish Harami", "Three Black Crows", "Tweezer Top", "Bearish Belt Hold", "Bearish Marubozu"]
@@ -454,7 +443,7 @@ class AnalysisEngine:
                 multiplier = 0.5
                 extra_conf = -10
                 pattern_comment += " Bullish patterns detected, tightening range and decreasing confidence."
-        else:  # neutral
+        else:
             multiplier = 0.75
             extra_conf = -5
             pattern_comment += " Neutral trend; using tighter ranges."
@@ -490,7 +479,6 @@ class AnalysisEngine:
             else:
                 sl1 = entry_price - atr * 2
                 stoplosses.append(sl1)
-            # Add pattern target if bullish
             for pat, ptgt in pattern_targets.items():
                 if pat in AnalysisEngine.bullish_charts and ptgt > entry_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
                     if len(targets) < 2 and (targets and abs(ptgt - targets[0]) <= max_diff * 1.5):
@@ -520,12 +508,11 @@ class AnalysisEngine:
             else:
                 sl1 = entry_price + atr * 2
                 stoplosses.append(sl1)
-            # Add pattern target if bearish
             for pat, ptgt in pattern_targets.items():
                 if pat in AnalysisEngine.bearish_charts and ptgt < entry_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
                     if len(targets) < 2 and (targets and abs(ptgt - targets[0]) <= max_diff * 1.5):
                         targets.append(ptgt)
-        else:  # neutral
+        else:
             nearest_support = min(supports, key=lambda s: abs(s - current_price)) if supports else current_price - atr
             nearest_resistance = min(resistances, key=lambda r: abs(r - current_price)) if resistances else current_price + atr
             targets = [nearest_resistance] if nearest_resistance > current_price else [nearest_support]
@@ -541,28 +528,26 @@ class AnalysisEngine:
             user_sl_raw = entry_price * (1 - risk_pct)
             close_levels = [s for s in supports if abs(s - user_sl_raw) < tol and s < entry_price]
             if close_levels:
-                return max(close_levels)  # highest for less risk
+                return max(close_levels)
             return user_sl_raw
         elif dominant_bias == "short":
             user_sl_raw = entry_price * (1 + risk_pct)
             close_levels = [r for r in resistances if abs(r - user_sl_raw) < tol and r > entry_price]
             if close_levels:
-                return min(close_levels)  # lowest for less risk
+                return min(close_levels)
             return user_sl_raw
-        else:  # neutral
-            return entry_price * (1 - 0.1)  # Conservative 10% risk
+        else:
+            return entry_price * (1 - 0.1)
 
-# ========= Main Pipeline =========
-
+# Main Pipeline
 def advisory_pipeline(input_json):
     data = InputValidator.validate_and_normalize(input_json)
 
-    # Check coin exists
     if data["market"] == "spot":
         info = client.get_symbol_info(data["coin"])
         if info is None:
             raise ValueError("Coin not found or invalid symbol on Binance spot market!")
-    else:  # futures
+    else:
         futures_info = client.futures_exchange_info()
         futures_symbols = [s['symbol'] for s in futures_info['symbols'] if s['status'] == 'TRADING']
         if data["coin"] not in futures_symbols:
@@ -573,17 +558,12 @@ def advisory_pipeline(input_json):
     df_1d = get_ohlcv_df(data["coin"], Client.KLINE_INTERVAL_1DAY, "6 months ago UTC", data["market"])
 
     atr = compute_atr(df_1d)
-
     detected_candles = detect_candlestick_patterns(df_1d)
     detected_charts, pattern_targets = detect_chart_patterns(df_1d)
-
     profit_loss, profit_comment = AnalysisEngine.profitability(data["position_type"], data["entry_price"], current_price, data["quantity"])
-
     trend, trend_conf, trend_comment = AnalysisEngine.market_trend(df_1d)
-
     dominant_bias, trend_extra_conf, trend_pattern_comment = AnalysisEngine.determine_dominant_trend(df_1d, detected_candles, detected_charts)
 
-    # If user has both positions, force to dominant bias
     if data["has_both_positions"]:
         analysis_bias = dominant_bias
         warning = f"Since you have both positions, analyzing based on dominant trend ({dominant_bias}). Consider closing the opposing position."
@@ -594,14 +574,10 @@ def advisory_pipeline(input_json):
             warning = f"Your {data['position_type']} position opposes the {dominant_bias} trend—consider exiting to align with market momentum."
 
     multiplier, extra_conf, pattern_comment = AnalysisEngine.adjust_based_on_patterns(analysis_bias, detected_candles, detected_charts, trend_conf, df_1d, atr)
-
     tol = atr * 0.5
     supports, resistances = detect_support_resistance(df_1d, tol=tol)
-
-    max_diff = atr * 5  # adaptive to volatility
-
+    max_diff = atr * 5
     targets, stoplosses = AnalysisEngine.target_stoploss(analysis_bias, supports, resistances, data["entry_price"], pattern_targets, atr, current_price, max_diff=max_diff)
-
     user_sl = AnalysisEngine.calculate_user_sl(analysis_bias, data["entry_price"], supports, resistances, atr)
 
     recommended_action = "Go long" if dominant_bias == "long" else "Go short" if dominant_bias == "short" else "Stay neutral/avoid new positions"
@@ -633,7 +609,7 @@ def advisory_pipeline(input_json):
     }
     return output
 
-# ========= Input Model for FastAPI =========
+# Input Model for FastAPI
 class TradeInput(BaseModel):
     coin: str
     market: str
@@ -642,8 +618,16 @@ class TradeInput(BaseModel):
     position_type: str
     has_both_positions: Optional[bool] = False
 
-# ========= FastAPI App =========
+# FastAPI App
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://position-analyzer.vercel.app", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.post("/analyze")
 async def analyze_position(input_data: TradeInput):
@@ -656,5 +640,3 @@ async def analyze_position(input_data: TradeInput):
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-
-# To run: uvicorn main:app --host 0.0.0.0 --port 8000
