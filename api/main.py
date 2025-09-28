@@ -7,11 +7,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
-
-# Initialize Binance Client with environment variables
-API_KEY = os.getenv('API_KEY')
-API_SECRET = os.getenv('API_SECRET')
-client = Client(api_key=API_KEY, api_secret=API_SECRET)
+import requests
 
 # Input & Validation
 class InputValidator:
@@ -30,46 +26,61 @@ class InputValidator:
         data["has_both_positions"] = data.get("has_both_positions", False)
         return data
 
-# Binance Data Fetch
-def get_all_coins():
+# Binance Data Fetch (with proxy support)
+def initialize_client():
+    API_KEY = os.getenv('API_KEY')
+    API_SECRET = os.getenv('API_SECRET')
+    if not API_KEY or not API_SECRET:
+        raise ValueError("API_KEY or API_SECRET not set in environment variables")
+    # Use a free proxy (example, replace with a working one if needed)
+    proxies = {'http': 'http://162.240.19.30:80', 'https': 'http://162.240.19.30:80'}
+    return Client(api_key=API_KEY, api_secret=API_SECRET, requests_params={'proxies': proxies})
+
+def get_all_coins(client):
     spot_symbols = []
     futures_symbols = []
     try:
         spot_info = client.get_exchange_info()
         spot_symbols = [s['symbol'] for s in spot_info['symbols'] if s['status'] == 'TRADING']
-    except:
-        pass
+    except Exception as e:
+        print(f"Error fetching spot symbols: {e}")
     try:
         futures_info = client.futures_exchange_info()
         futures_symbols = [s['symbol'] for s in futures_info['symbols'] if s['status'] == 'TRADING']
-    except:
-        pass
+    except Exception as e:
+        print(f"Error fetching futures symbols: {e}")
     all_coins = list(set(spot_symbols + futures_symbols))
     return sorted(all_coins)
 
-def get_current_price(coin, market):
-    if market == "spot":
-        ticker = client.get_symbol_ticker(symbol=coin)
-    else:
-        ticker = client.futures_symbol_ticker(symbol=coin)
-    return float(ticker['price'])
+def get_current_price(client, coin, market):
+    try:
+        if market == "spot":
+            ticker = client.get_symbol_ticker(symbol=coin)
+        else:
+            ticker = client.futures_symbol_ticker(symbol=coin)
+        return float(ticker['price'])
+    except Exception as e:
+        raise ValueError(f"Failed to get current price: {e}")
 
-def get_ohlcv_df(coin, interval, lookback, market):
-    if market == "spot":
-        klines = client.get_historical_klines(coin, interval, lookback)
-    else:
-        klines = client.futures_historical_klines(coin, interval, lookback)
-    df = pd.DataFrame(klines, columns=['open_time', 'open', 'high', 'low', 'close', 'volume',
-                                       'close_time', 'quote_asset_volume', 'num_trades',
-                                       'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
-    df['open'] = df['open'].astype(float)
-    df['high'] = df['high'].astype(float)
-    df['low'] = df['low'].astype(float)
-    df['close'] = df['close'].astype(float)
-    df['volume'] = df['volume'].astype(float)
-    return df[['open', 'high', 'low', 'close', 'volume']]
+def get_ohlcv_df(client, coin, interval, lookback, market):
+    try:
+        if market == "spot":
+            klines = client.get_historical_klines(coin, interval, lookback)
+        else:
+            klines = client.futures_historical_klines(coin, interval, lookback)
+        df = pd.DataFrame(klines, columns=['open_time', 'open', 'high', 'low', 'close', 'volume',
+                                          'close_time', 'quote_asset_volume', 'num_trades',
+                                          'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
+        df['open'] = df['open'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
+        df['close'] = df['close'].astype(float)
+        df['volume'] = df['volume'].astype(float)
+        return df[['open', 'high', 'low', 'close', 'volume']]
+    except Exception as e:
+        raise ValueError(f"Failed to fetch OHLCV data: {e}")
 
-# Indicator & Analysis Helpers
+# Indicator & Analysis Helpers (unchanged)
 def compute_ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
 
@@ -302,7 +313,7 @@ def detect_chart_patterns(df):
 
     return patterns, pattern_targets
 
-# Analysis Engine
+# Analysis Engine (unchanged)
 class AnalysisEngine:
     bullish_candles = ["Hammer", "Inverted Hammer", "Bullish Engulfing", "Piercing Line", "Morning Star", "Bullish Harami", "Three White Soldiers", "Tweezer Bottom", "Bullish Belt Hold", "Bullish Marubozu"]
     bearish_candles = ["Shooting Star", "Hanging Man", "Bearish Engulfing", "Dark Cloud Cover", "Evening Star", "Bearish Harami", "Three Black Crows", "Tweezer Top", "Bearish Belt Hold", "Bearish Marubozu"]
@@ -540,7 +551,7 @@ class AnalysisEngine:
             return entry_price * (1 - 0.1)
 
 # Main Pipeline
-def advisory_pipeline(input_json):
+def advisory_pipeline(client, input_json):
     data = InputValidator.validate_and_normalize(input_json)
 
     if data["market"] == "spot":
@@ -554,8 +565,8 @@ def advisory_pipeline(input_json):
             raise ValueError("Coin not found or invalid symbol on Binance futures market!")
         info = next((s for s in futures_info['symbols'] if s['symbol'] == data["coin"]), None)
 
-    current_price = get_current_price(data["coin"], data["market"])
-    df_1d = get_ohlcv_df(data["coin"], Client.KLINE_INTERVAL_1DAY, "6 months ago UTC", data["market"])
+    current_price = get_current_price(client, data["coin"], data["market"])
+    df_1d = get_ohlcv_df(client, data["coin"], Client.KLINE_INTERVAL_1DAY, "6 months ago UTC", data["market"])
 
     atr = compute_atr(df_1d)
     detected_candles = detect_candlestick_patterns(df_1d)
@@ -632,9 +643,10 @@ app.add_middleware(
 @app.post("/analyze")
 async def analyze_position(input_data: TradeInput):
     try:
+        client = initialize_client()
         data = input_data.dict()
         validated_data = InputValidator.validate_and_normalize(data)
-        result = advisory_pipeline(validated_data)
+        result = advisory_pipeline(client, validated_data)
         return result
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
