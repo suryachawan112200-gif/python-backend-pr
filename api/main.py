@@ -9,6 +9,16 @@ from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://position-analyzer.vercel.app", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Input & Validation
 class InputValidator:
     REQUIRED_FIELDS = {"coin", "market", "entry_price", "quantity", "position_type"}
@@ -32,7 +42,6 @@ def initialize_client():
     API_SECRET = os.getenv('API_SECRET')
     if not API_KEY or not API_SECRET:
         raise ValueError("API_KEY or API_SECRET not set in environment variables")
-    # Use a free proxy (example, replace with a working one if needed)
     proxies = {'http': 'http://162.240.19.30:80', 'https': 'http://162.240.19.30:80'}
     return Client(api_key=API_KEY, api_secret=API_SECRET, requests_params={'proxies': proxies})
 
@@ -80,7 +89,7 @@ def get_ohlcv_df(client, coin, interval, lookback, market):
     except Exception as e:
         raise ValueError(f"Failed to fetch OHLCV data: {e}")
 
-# Indicator & Analysis Helpers (unchanged)
+# Indicator & Analysis Helpers
 def compute_ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
 
@@ -313,7 +322,7 @@ def detect_chart_patterns(df):
 
     return patterns, pattern_targets
 
-# Analysis Engine (unchanged)
+# Analysis Engine
 class AnalysisEngine:
     bullish_candles = ["Hammer", "Inverted Hammer", "Bullish Engulfing", "Piercing Line", "Morning Star", "Bullish Harami", "Three White Soldiers", "Tweezer Bottom", "Bullish Belt Hold", "Bullish Marubozu"]
     bearish_candles = ["Shooting Star", "Hanging Man", "Bearish Engulfing", "Dark Cloud Cover", "Evening Star", "Bearish Harami", "Three Black Crows", "Tweezer Top", "Bearish Belt Hold", "Bearish Marubozu"]
@@ -629,16 +638,9 @@ class TradeInput(BaseModel):
     position_type: str
     has_both_positions: Optional[bool] = False
 
-# FastAPI App
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://position-analyzer.vercel.app", "http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@app.get("/", response_class=HTTPException)
+async def root():
+    return {"message": "Welcome to the Trading Analysis API. Use /analyze with POST to analyze positions."}
 
 @app.post("/analyze")
 async def analyze_position(input_data: TradeInput):
