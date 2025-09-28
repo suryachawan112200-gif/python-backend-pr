@@ -9,6 +9,12 @@
   "routes": [
     {
       "src": "/analyze",
+      "methods": ["POST"],
+      "dest": "api/main.py"
+    },
+    {
+      "src": "/",
+      "methods": ["GET"],
       "dest": "api/main.py"
     },
     {
