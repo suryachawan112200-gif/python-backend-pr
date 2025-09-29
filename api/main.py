@@ -38,12 +38,10 @@ class InputValidator:
 
 # Binance Data Fetch (with proxy support)
 def initialize_client():
-    API_KEY = os.getenv('API_KEY')
-    API_SECRET = os.getenv('API_SECRET')
-    if not API_KEY or not API_SECRET:
-        raise ValueError("API_KEY or API_SECRET not set in environment variables")
-    proxies = {'http': 'http://45.77.24.239:8080', 'https': 'http://45.77.24.239:8080'}
-    return Client(api_key=API_KEY, api_secret=API_SECRET, requests_params={'proxies': proxies})
+    API_KEY = '3667744fdce537a164763cf22e77510b3a2a1159a97da6ba92a3eb1b5188470d'
+    API_SECRET = 'baca1443f0765a5c5104b14c3eefcb15d714eb41f9b6dcbee3b339863acb7821'
+    
+    
 
 def get_all_coins(client):
     spot_symbols = []
