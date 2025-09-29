@@ -42,8 +42,7 @@ def initialize_client():
     API_SECRET = os.getenv('API_SECRET')
     if not API_KEY or not API_SECRET:
         raise ValueError("API_KEY or API_SECRET not set in environment variables")
-    # Use a free proxy that supports Binance (replace with a working one from free-proxy-list.net if needed)
-    proxies = {'http': 'http://162.240.19.30:80', 'https': 'http://162.240.19.30:80'}
+    proxies = {'http': 'http://45.77.24.239:8080', 'https': 'http://45.77.24.239:8080'}
     return Client(api_key=API_KEY, api_secret=API_SECRET, requests_params={'proxies': proxies})
 
 def get_all_coins(client):
@@ -655,8 +654,3 @@ async def analyze_position(input_data: TradeInput):
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-</xaiArtifact>
-
-### Test Command
-```powershell
-Invoke-WebRequest -Uri "https://python-backend-pr.vercel.app/analyze" -Method Post -Headers @{"Content-Type"="application/json"} -Body '{"coin": "TRUUSDT", "market": "futures", "entry_price": 0.02735, "quantity": 100, "position_type": "long"}'
