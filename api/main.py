@@ -42,9 +42,8 @@ def initialize_client():
     API_SECRET = os.getenv('API_SECRET')
     if not API_KEY or not API_SECRET:
         raise ValueError("API_KEY or API_SECRET not set in environment variables")
-    proxies = {'http': 'http://162.240.19.30:80', 'https': 'http://162.240.19.30:80'}
+    proxies = {'http': 'http://<new_proxy_ip>:<port>', 'https': 'http://<new_proxy_ip>:<port>'}
     return Client(api_key=API_KEY, api_secret=API_SECRET, requests_params={'proxies': proxies})
-
 def get_all_coins(client):
     spot_symbols = []
     futures_symbols = []
