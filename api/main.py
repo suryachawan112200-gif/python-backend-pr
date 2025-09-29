@@ -638,7 +638,7 @@ class TradeInput(BaseModel):
     position_type: str
     has_both_positions: Optional[bool] = False
 
-@app.get("/", response_class=HTTPException)
+@app.get("/")
 async def root():
     return {"message": "Welcome to the Trading Analysis API. Use /analyze with POST to analyze positions."}
 
