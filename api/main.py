@@ -36,12 +36,11 @@ class InputValidator:
         data["has_both_positions"] = data.get("has_both_positions", False)
         return data
 
-# Binance Data Fetch (with proxy support)
+# Binance Data Fetch
 def initialize_client():
     API_KEY = '3667744fdce537a164763cf22e77510b3a2a1159a97da6ba92a3eb1b5188470d'
     API_SECRET = 'baca1443f0765a5c5104b14c3eefcb15d714eb41f9b6dcbee3b339863acb7821'
-    
-    
+    return Client(api_key=API_KEY, api_secret=API_SECRET)
 
 def get_all_coins(client):
     spot_symbols = []
