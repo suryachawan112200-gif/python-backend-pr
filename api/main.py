@@ -7,16 +7,16 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
-import requests
 
 app = FastAPI()
 
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://position-analyzer.vercel.app", "http://localhost:3000"],
+    allow_origins=["https://position-analyzer-app-2eip-76bzsjiys-vishals-projects-c3cd8a6a.vercel.app"], # Allow your frontend origin
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"], # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"], # Allow all headers
 )
 
 # Input & Validation
@@ -40,7 +40,13 @@ class InputValidator:
 def initialize_client():
     API_KEY = '3667744fdce537a164763cf22e77510b3a2a1159a97da6ba92a3eb1b5188470d'
     API_SECRET = 'baca1443f0765a5c5104b14c3eefcb15d714eb41f9b6dcbee3b339863acb7821'
-    return Client(api_key=API_KEY, api_secret=API_SECRET)
+    try:
+        client = Client(api_key=API_KEY, api_secret=API_SECRET)
+        client.get_account()  # Test connection
+        return client
+    except Exception as e:
+        print(f"Failed to initialize Binance client: {e}")
+        raise
 
 def get_all_coins(client):
     spot_symbols = []
