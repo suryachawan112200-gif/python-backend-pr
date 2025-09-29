@@ -36,13 +36,14 @@ class InputValidator:
         data["has_both_positions"] = data.get("has_both_positions", False)
         return data
 
-# Binance Data Fetch
+# Binance Data Fetch (with proxy support)
 def initialize_client():
     API_KEY = os.getenv('API_KEY')
     API_SECRET = os.getenv('API_SECRET')
     if not API_KEY or not API_SECRET:
         raise ValueError("API_KEY or API_SECRET not set in environment variables")
-    return Client(api_key=API_KEY, api_secret=API_SECRET)  # Removed proxies
+    proxies = {'http': 'http://162.240.19.30:80', 'https': 'http://162.240.19.30:80'}
+    return Client(api_key=API_KEY, api_secret=API_SECRET, requests_params={'proxies': proxies})
 
 def get_all_coins(client):
     spot_symbols = []
@@ -653,3 +654,12 @@ async def analyze_position(input_data: TradeInput):
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+</xaiArtifact>
+
+### Push Command
+```bash
+cd C:\Users\seemu\python-backend-project
+git add api/main.py
+git commit -m "Remove proxy to test direct connection"
+git push origin main
+vercel --prod
