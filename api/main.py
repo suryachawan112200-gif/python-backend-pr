@@ -36,11 +36,12 @@ class InputValidator:
         data["has_both_positions"] = data.get("has_both_positions", False)
         return data
 
-# Binance Data Fetch (direct connection)
+# Binance Data Fetch (with proxy support)
 def initialize_client():
     API_KEY = '3667744fdce537a164763cf22e77510b3a2a1159a97da6ba92a3eb1b5188470d'
     API_SECRET = 'baca1443f0765a5c5104b14c3eefcb15d714eb41f9b6dcbee3b339863acb7821'
-    return Client(api_key=API_KEY, api_secret=API_SECRET)
+    
+    
 
 def get_all_coins(client):
     spot_symbols = []
@@ -617,4 +618,37 @@ def advisory_pipeline(client, input_json):
             "candlesticks": detected_candles,
             "chart_patterns": detected_charts
         },
-        "
+        "targets": targets,
+        "market_stoplosses": stoplosses,
+        "user_stoploss": user_sl,
+        "confidence_level": (trend_conf + trend_extra_conf + extra_conf + 80) // 2,
+        "recommended_action": recommended_action,
+        "warning": warning
+    }
+    return output
+
+# Input Model for FastAPI
+class TradeInput(BaseModel):
+    coin: str
+    market: str
+    entry_price: float
+    quantity: float
+    position_type: str
+    has_both_positions: Optional[bool] = False
+
+@app.get("/")
+async def root():
+    return {"message": "Welcome to the Trading Analysis API. Use /analyze with POST to analyze positions."}
+
+@app.post("/analyze")
+async def analyze_position(input_data: TradeInput):
+    try:
+        client = initialize_client()
+        data = input_data.dict()
+        validated_data = InputValidator.validate_and_normalize(data)
+        result = advisory_pipeline(client, validated_data)
+        return result
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
