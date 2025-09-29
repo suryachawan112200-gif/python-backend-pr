@@ -42,8 +42,10 @@ def initialize_client():
     API_SECRET = os.getenv('API_SECRET')
     if not API_KEY or not API_SECRET:
         raise ValueError("API_KEY or API_SECRET not set in environment variables")
-    proxies = {'http': 'http://<new_proxy_ip>:<port>', 'https': 'http://<new_proxy_ip>:<port>'}
+    # Use a free proxy that supports Binance (replace with a working one from free-proxy-list.net if needed)
+    proxies = {'http': 'http://162.240.19.30:80', 'https': 'http://162.240.19.30:80'}
     return Client(api_key=API_KEY, api_secret=API_SECRET, requests_params={'proxies': proxies})
+
 def get_all_coins(client):
     spot_symbols = []
     futures_symbols = []
@@ -655,10 +657,6 @@ async def analyze_position(input_data: TradeInput):
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 </xaiArtifact>
 
-### Push Command
-```bash
-cd C:\Users\seemu\python-backend-project
-git add api/main.py
-git commit -m "Remove proxy to test direct connection"
-git push origin main
-vercel --prod
+### Test Command
+```powershell
+Invoke-WebRequest -Uri "https://python-backend-pr.vercel.app/analyze" -Method Post -Headers @{"Content-Type"="application/json"} -Body '{"coin": "TRUUSDT", "market": "futures", "entry_price": 0.02735, "quantity": 100, "position_type": "long"}'
