@@ -1,7 +1,6 @@
-import os
 import json
 import random
-from binance.client import Client
+from pybit.unified_trading import HTTP  # Bybit's official Python library
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -13,11 +12,15 @@ app = FastAPI()
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://position-analyzer-app-2eip-76bzsjiys-vishals-projects-c3cd8a6a.vercel.app"], # Allow your frontend origin
+    allow_origins=["https://position-analyzer-app-2eip-76bzsjiys-vishals-projects-c3cd8a6a.vercel.app"],  # Allow your frontend origin
     allow_credentials=True,
-    allow_methods=["*"], # Allow all methods (GET, POST, etc.)
-    allow_headers=["*"], # Allow all headers
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
+
+# Bybit Testnet API keys (replace with your testnet keys)
+API_KEY = '82L1xRVbgZDubYaTkx'  # Paste your Bybit testnet API key
+API_SECRET = 'D8nkmiYkKc0YfSHmfuDocDW9aOQOueO22n9A'  # Paste your Bybit testnet API secret
 
 # Input & Validation
 class InputValidator:
@@ -36,29 +39,33 @@ class InputValidator:
         data["has_both_positions"] = data.get("has_both_positions", False)
         return data
 
-# Binance Data Fetch
+# Bybit Data Fetch
 def initialize_client():
-    API_KEY = '3667744fdce537a164763cf22e77510b3a2a1159a97da6ba92a3eb1b5188470d'
-    API_SECRET = 'baca1443f0765a5c5104b14c3eefcb15d714eb41f9b6dcbee3b339863acb7821'
     try:
-        client = Client(api_key=API_KEY, api_secret=API_SECRET)
-        client.get_account()  # Test connection
+        client = HTTP(
+            api_key=API_KEY,
+            api_secret=API_SECRET,
+            testnet=True,  # Using Bybit testnet
+            base_url="https://api-testnet.bybit.com"  # Testnet endpoint
+        )
+        # Test connection with a simple request
+        client.get_server_time()
         return client
     except Exception as e:
-        print(f"Failed to initialize Binance client: {e}")
+        print(f"Failed to initialize Bybit client: {e}")
         raise
 
 def get_all_coins(client):
     spot_symbols = []
     futures_symbols = []
     try:
-        spot_info = client.get_exchange_info()
-        spot_symbols = [s['symbol'] for s in spot_info['symbols'] if s['status'] == 'TRADING']
+        spot_info = client.get_instruments_info(category="spot")
+        spot_symbols = [s['symbol'] for s in spot_info['result']['list'] if s['status'] == 'Trading']
     except Exception as e:
         print(f"Error fetching spot symbols: {e}")
     try:
-        futures_info = client.futures_exchange_info()
-        futures_symbols = [s['symbol'] for s in futures_info['symbols'] if s['status'] == 'TRADING']
+        futures_info = client.get_instruments_info(category="linear")  # USDT perpetuals on testnet
+        futures_symbols = [s['symbol'] for s in futures_info['result']['list'] if s['status'] == 'Trading']
     except Exception as e:
         print(f"Error fetching futures symbols: {e}")
     all_coins = list(set(spot_symbols + futures_symbols))
@@ -67,22 +74,31 @@ def get_all_coins(client):
 def get_current_price(client, coin, market):
     try:
         if market == "spot":
-            ticker = client.get_symbol_ticker(symbol=coin)
+            ticker = client.get_tickers(category="spot", symbol=coin)
+            return float(ticker['result']['list'][0]['lastPrice'])
         else:
-            ticker = client.futures_symbol_ticker(symbol=coin)
-        return float(ticker['price'])
+            ticker = client.get_tickers(category="linear", symbol=coin)  # USDT perpetuals
+            return float(ticker['result']['list'][0]['lastPrice'])
     except Exception as e:
         raise ValueError(f"Failed to get current price: {e}")
 
 def get_ohlcv_df(client, coin, interval, lookback, market):
     try:
         if market == "spot":
-            klines = client.get_historical_klines(coin, interval, lookback)
+            klines = client.get_kline(
+                category="spot",
+                symbol=coin,
+                interval=interval,
+                limit=200  # Adjust limit as needed (max 1000 on testnet)
+            )
         else:
-            klines = client.futures_historical_klines(coin, interval, lookback)
-        df = pd.DataFrame(klines, columns=['open_time', 'open', 'high', 'low', 'close', 'volume',
-                                          'close_time', 'quote_asset_volume', 'num_trades',
-                                          'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'])
+            klines = client.get_kline(
+                category="linear",
+                symbol=coin,
+                interval=interval,
+                limit=200
+            )
+        df = pd.DataFrame(klines['result']['list'], columns=['open_time', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
         df['open'] = df['open'].astype(float)
         df['high'] = df['high'].astype(float)
         df['low'] = df['low'].astype(float)
@@ -567,18 +583,16 @@ def advisory_pipeline(client, input_json):
     data = InputValidator.validate_and_normalize(input_json)
 
     if data["market"] == "spot":
-        info = client.get_symbol_info(data["coin"])
-        if info is None:
-            raise ValueError("Coin not found or invalid symbol on Binance spot market!")
+        info = client.get_instruments_info(category="spot", symbol=data["coin"])
+        if not info['result']['list']:
+            raise ValueError("Coin not found or invalid symbol on Bybit spot market!")
     else:
-        futures_info = client.futures_exchange_info()
-        futures_symbols = [s['symbol'] for s in futures_info['symbols'] if s['status'] == 'TRADING']
-        if data["coin"] not in futures_symbols:
-            raise ValueError("Coin not found or invalid symbol on Binance futures market!")
-        info = next((s for s in futures_info['symbols'] if s['symbol'] == data["coin"]), None)
+        futures_info = client.get_instruments_info(category="linear", symbol=data["coin"])  # USDT perpetuals
+        if not futures_info['result']['list']:
+            raise ValueError("Coin not found or invalid symbol on Bybit futures market!")
 
     current_price = get_current_price(client, data["coin"], data["market"])
-    df_1d = get_ohlcv_df(client, data["coin"], Client.KLINE_INTERVAL_1DAY, "6 months ago UTC", data["market"])
+    df_1d = get_ohlcv_df(client, data["coin"], "D", "200 days ago UTC", data["market"])  # Adjusted for Bybit interval
 
     atr = compute_atr(df_1d)
     detected_candles = detect_candlestick_patterns(df_1d)
