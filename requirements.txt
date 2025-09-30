@@ -4,3 +4,5 @@ pydantic==2.9.2
 python-binance==1.0.19
 pandas==2.2.3
 requests==2.32.3
+pybit==5.2.0  # Use the latest version as of 2025; check PyPI for updates if needed
+pandas
