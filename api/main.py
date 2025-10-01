@@ -52,7 +52,7 @@ def initialize_client():
         client.get_server_time()
         return client
     except Exception as e:
-        print(f"Failed to initialize Bybit client: {e}")
+        print(f"Failed to initialize Bybit client: {str(e)}")
         raise
 
 def get_all_coins(client):
@@ -62,12 +62,12 @@ def get_all_coins(client):
         spot_info = client.get_instruments_info(category="spot")
         spot_symbols = [s['symbol'] for s in spot_info['result']['list'] if s['status'] == 'Trading']
     except Exception as e:
-        print(f"Error fetching spot symbols: {e}")
+        print(f"Error fetching spot symbols: {str(e)}")
     try:
         futures_info = client.get_instruments_info(category="linear")  # USDT perpetuals on testnet
         futures_symbols = [s['symbol'] for s in futures_info['result']['list'] if s['status'] == 'Trading']
     except Exception as e:
-        print(f"Error fetching futures symbols: {e}")
+        print(f"Error fetching futures symbols: {str(e)}")
     all_coins = list(set(spot_symbols + futures_symbols))
     return sorted(all_coins)
 
@@ -80,7 +80,7 @@ def get_current_price(client, coin, market):
             ticker = client.get_tickers(category="linear", symbol=coin)  # USDT perpetuals
             return float(ticker['result']['list'][0]['lastPrice'])
     except Exception as e:
-        raise ValueError(f"Failed to get current price: {e}")
+        raise ValueError(f"Failed to get current price for {coin}: {str(e)}")
 
 def get_ohlcv_df(client, coin, interval, lookback, market):
     try:
@@ -98,6 +98,8 @@ def get_ohlcv_df(client, coin, interval, lookback, market):
                 interval=interval,
                 limit=200
             )
+        if not klines['result'] or 'list' not in klines['result']:
+            raise ValueError(f"No OHLCV data available for {coin}")
         df = pd.DataFrame(klines['result']['list'], columns=['open_time', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
         df['open'] = df['open'].astype(float)
         df['high'] = df['high'].astype(float)
@@ -106,7 +108,7 @@ def get_ohlcv_df(client, coin, interval, lookback, market):
         df['volume'] = df['volume'].astype(float)
         return df[['open', 'high', 'low', 'close', 'volume']]
     except Exception as e:
-        raise ValueError(f"Failed to fetch OHLCV data: {e}")
+        raise ValueError(f"Failed to fetch OHLCV data for {coin}: {str(e)}")
 
 # Indicator & Analysis Helpers
 def compute_ema(series, span):
@@ -118,7 +120,7 @@ def compute_ma(series, window):
 def compute_atr(df, period=14):
     tr = pd.concat([df['high'] - df['low'], (df['high'] - df['close'].shift()).abs(), (df['low'] - df['close'].shift()).abs()], axis=1).max(axis=1)
     atr = tr.rolling(period).mean()
-    return atr.iloc[-1]
+    return atr.iloc[-1] if not atr.empty and len(atr) >= period else 0.0
 
 def compute_rsi(series, period=14):
     delta = series.diff()
@@ -126,9 +128,9 @@ def compute_rsi(series, period=14):
     loss = -delta.where(delta < 0, 0)
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
-    rs = avg_gain / avg_loss
+    rs = avg_gain / avg_loss.replace(0, 1e-10)  # Avoid division by zero
     rsi = 100 - 100 / (1 + rs)
-    return rsi.iloc[-1]
+    return rsi.iloc[-1] if not rsi.empty and len(rsi) >= period else 50.0
 
 def compute_macd(series, fast=12, slow=26, signal=9):
     ema_fast = compute_ema(series, fast)
@@ -136,7 +138,7 @@ def compute_macd(series, fast=12, slow=26, signal=9):
     macd = ema_fast - ema_slow
     signal_line = compute_ema(macd, signal)
     histogram = macd - signal_line
-    return macd.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]
+    return (macd.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]) if len(macd) >= signal else (0.0, 0.0, 0.0)
 
 def detect_support_resistance(df, window=5, lookback=90, tol=0.001):
     df_close = df['close']
@@ -351,7 +353,7 @@ class AnalysisEngine:
     @staticmethod
     def profitability(position_type, entry_price, current_price, quantity):
         pl = (current_price - entry_price) * quantity if position_type == "long" else (entry_price - current_price) * quantity
-        pl_pct = (pl / (entry_price * quantity)) * 100
+        pl_pct = (pl / (entry_price * quantity)) * 100 if entry_price * quantity != 0 else 0  # Avoid division by zero
         if pl_pct > 0.5:
             comment = "Profit above avg move."
         elif pl_pct < -0.5:
@@ -410,11 +412,11 @@ class AnalysisEngine:
     @staticmethod
     def market_trend(df_ohlcv):
         close = df_ohlcv['close']
-        ema20 = compute_ema(close, 20).iloc[-1]
-        ma50 = compute_ma(close, 50).iloc[-1]
-        last_close = close.iloc[-1]
-        prev_close = close.iloc[-2]
-        daily_move_pct = ((last_close - prev_close) / prev_close) * 100
+        ema20 = compute_ema(close, 20).iloc[-1] if len(close) >= 20 else close.iloc[-1] if not close.empty else 0.0
+        ma50 = compute_ma(close, 50).iloc[-1] if len(close) >= 50 else close.iloc[-1] if not close.empty else 0.0
+        last_close = close.iloc[-1] if not close.empty else 0.0
+        prev_close = close.iloc[-2] if len(close) > 1 else last_close
+        daily_move_pct = ((last_close - prev_close) / prev_close) * 100 if prev_close != 0 else 0.0
 
         trend = "sideways"
         confidence = 60
@@ -585,14 +587,14 @@ def advisory_pipeline(client, input_json):
     if data["market"] == "spot":
         info = client.get_instruments_info(category="spot", symbol=data["coin"])
         if not info['result']['list']:
-            raise ValueError("Coin not found or invalid symbol on Bybit spot market!")
+            raise ValueError(f"Coin {data['coin']} not found or invalid symbol on Bybit spot market!")
     else:
         futures_info = client.get_instruments_info(category="linear", symbol=data["coin"])  # USDT perpetuals
         if not futures_info['result']['list']:
-            raise ValueError("Coin not found or invalid symbol on Bybit futures market!")
+            raise ValueError(f"Coin {data['coin']} not found or invalid symbol on Bybit futures market!")
 
     current_price = get_current_price(client, data["coin"], data["market"])
-    df_1d = get_ohlcv_df(client, data["coin"], "D", "200 days ago UTC", data["market"])  # Adjusted for Bybit interval
+    df_1d = get_ohlcv_df(client, data["coin"], "D", 200, data["market"])  # Fixed lookback to integer
 
     atr = compute_atr(df_1d)
     detected_candles = detect_candlestick_patterns(df_1d)
