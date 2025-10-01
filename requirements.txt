@@ -1,8 +1,6 @@
 fastapi==0.115.2
 uvicorn==0.31.1
 pydantic==2.9.2
-
-pandas==2.2.3
 requests==2.32.3
-pybit==5.2.0  # Use the latest version as of 2025; check PyPI for updates if needed
+pybit>=5.2.0
 pandas
