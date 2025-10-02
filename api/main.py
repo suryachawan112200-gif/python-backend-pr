@@ -45,7 +45,7 @@ def initialize_client():
         client = HTTP(
             api_key=API_KEY,
             api_secret=API_SECRET,
-            testnet=True,  # Using Bybit testnet
+            testnet=True  # No base_url
         )
         # Test connection with a simple request
         client.get_server_time()
