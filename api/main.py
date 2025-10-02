@@ -46,7 +46,6 @@ def initialize_client():
             api_key=API_KEY,
             api_secret=API_SECRET,
             testnet=True,  # Using Bybit testnet
-            base_url="https://api-testnet.bybit.com"  # Testnet endpoint
         )
         # Test connection with a simple request
         client.get_server_time()
