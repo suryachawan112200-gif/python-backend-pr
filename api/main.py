@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
+import time
 
 app = FastAPI()
 
@@ -40,6 +41,31 @@ class InputValidator:
         return data
 
 # Bybit Data Fetch
+
+def initialize_client():
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            client = HTTP(
+                api_key=API_KEY,
+                api_secret=API_SECRET,
+                testnet=True
+            )
+            # Test connection with a simple request
+            response = client.get_server_time()
+            print(f"Server time response: {response}")  # Add logging for debugging
+            return client
+        except Exception as e:
+            error_msg = str(e).lower()
+            print(f"Failed to initialize Bybit client (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            if "rate limit" in error_msg or "403" in error_msg:
+                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                print(f"Rate limit or 403 detected, waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+            else:
+                raise
+    raise Exception("Max retries reached for Bybit client initialization")
+    
 def initialize_client():
     try:
         client = HTTP(
