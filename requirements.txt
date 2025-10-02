@@ -1,6 +1,5 @@
-fastapi==0.115.2
-uvicorn==0.31.1
-pydantic==2.9.2
-requests==2.32.3
 pybit>=5.2.0
 pandas
+fastapi
+uvicorn
+pydantic
