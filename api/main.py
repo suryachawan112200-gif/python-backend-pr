@@ -19,8 +19,8 @@ app.add_middleware(
 )
 
 # Bybit Testnet API keys (replace with your testnet keys)
-API_KEY = '82L1xRVbgZDubYaTkx'  # Paste your Bybit testnet API key
-API_SECRET = 'D8nkmiYkKc0YfSHmfuDocDW9aOQOueO22n9A'  # Paste your Bybit testnet API secret
+API_KEY = 'n7lNaWq9ouh3bp9AFg'  # Paste your Bybit testnet API key
+API_SECRET = 'INy0x54boT61qvqTv1LJHgT1QA8RCdFNwKME'  # Paste your Bybit testnet API secret
 
 # Input & Validation
 class InputValidator:
