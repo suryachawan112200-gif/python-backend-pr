@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
+import requests
 
 app = FastAPI()
 
@@ -21,6 +22,8 @@ app.add_middleware(
 # Bybit Testnet API keys (replace with your testnet keys)
 API_KEY = '82L1xRVbgZDubYaTkx'  # Paste your Bybit testnet API key
 API_SECRET = 'D8nkmiYkKc0YfSHmfuDocDW9aOQOueO22n9A'  # Paste your Bybit testnet API secret
+proxies = {"http": "http://your-proxy:port", "https": "http://your-proxy:port"}
+client = HTTP(api_key=API_KEY, api_secret=API_SECRET, testnet=True, session=requests.Session(), proxies=proxies)
 
 # Input & Validation
 class InputValidator:
