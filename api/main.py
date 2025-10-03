@@ -21,8 +21,8 @@ app.add_middleware(
 )
 
 # Bybit Testnet API keys (use environment variables for security)
-API_KEY = os.getenv("API_KEY", "n7lNaWq9ouh3bp9AFg")  # Default to hardcoded for now
-API_SECRET = os.getenv("API_SECRET", "INy0x54boT61qvqTv1LJHgT1QA8RCdFNwKME")
+API_KEY = "n7lNaWq9ouh3bp9AFg"
+API_SECRET = "INy0x54boT61qvqTv1LJHgT1QA8RCdFNwKME"
 
 # Input & Validation
 class InputValidator:
