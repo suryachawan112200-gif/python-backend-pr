@@ -672,7 +672,7 @@ async def analyze_position(input_data: TradeInput, request: Request):
         return JSONResponse(
             content=result,
             headers={
-                "Access-Control-Allow-Origin": "https://position-analyzer-app-2eip-qv9hnw0a3-vishals-projects-c3cd8a6a.vercel.app",
+                "Access-Control-Allow-Origin": "https://position-analyzer-app.vercel.app",
                 "Access-Control-Allow-Methods": "POST",
                 "Access-Control-Allow-Headers": "Content-Type"
             }
