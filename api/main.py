@@ -14,7 +14,7 @@ app = FastAPI()
 # Enable CORS (as a fallback, though manual headers will handle it)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://pposition-analyzer-pci4etofg-vishals-projects-c3cd8a6a.vercel.app", "http://localhost:3000"],  # Match your frontend origin
+    allow_origins=["https://position-analyzer-app.vercel.app", "http://localhost:3000"],  # Match your frontend origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
