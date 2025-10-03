@@ -2,26 +2,27 @@ import json
 import random
 from pybit.unified_trading import HTTP  # Bybit's official Python library
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import time
+import os
 
 app = FastAPI()
 
-# Enable CORS
+# Enable CORS (as a fallback, though manual headers will handle it)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://position-analyzer-pci4etofg-vishals-projects-c3cd8a6a.vercel.app", "http://localhost:3000"],  # Updated to match frontend origin
+    allow_origins=["https://position-analyzer-app-2eip-qv9hnw0a3-vishals-projects-c3cd8a6a.vercel.app", "http://localhost:3000"],  # Match your frontend origin
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"]
 )
 
-# Bybit Testnet API keys (replace with your testnet keys)
-API_KEY = 'n7lNaWq9ouh3bp9AFg'  # Paste your Bybit testnet API key
-API_SECRET = 'INy0x54boT61qvqTv1LJHgT1QA8RCdFNwKME'  # Paste your Bybit testnet API secret
+# Bybit Testnet API keys (use environment variables for security)
+API_KEY = os.getenv("API_KEY", "n7lNaWq9ouh3bp9AFg")  # Default to hardcoded for now
+API_SECRET = os.getenv("API_SECRET", "INy0x54boT61qvqTv1LJHgT1QA8RCdFNwKME")
 
 # Input & Validation
 class InputValidator:
@@ -41,7 +42,6 @@ class InputValidator:
         return data
 
 # Bybit Data Fetch
-
 def initialize_client():
     max_retries = 5
     for attempt in range(max_retries):
@@ -53,32 +53,18 @@ def initialize_client():
             )
             # Test connection with a simple request
             response = client.get_server_time()
-            print(f"Server time response: {response}")  # Add logging for debugging
+            print(f"Server time response: {response}")
             return client
         except Exception as e:
             error_msg = str(e).lower()
             print(f"Failed to initialize Bybit client (attempt {attempt + 1}/{max_retries}): {str(e)}")
             if "rate limit" in error_msg or "403" in error_msg:
-                wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s, 8s, 16s
+                wait_time = 2 ** attempt  # Exponential backoff
                 print(f"Rate limit or 403 detected, waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
             else:
                 raise
     raise Exception("Max retries reached for Bybit client initialization")
-    
-def initialize_client():
-    try:
-        client = HTTP(
-            api_key=API_KEY,
-            api_secret=API_SECRET,
-            testnet=True  # No base_url
-        )
-        # Test connection with a simple request
-        client.get_server_time()
-        return client
-    except Exception as e:
-        print(f"Failed to initialize Bybit client: {str(e)}")
-        raise
 
 def get_all_coins(client):
     spot_symbols = []
@@ -89,7 +75,7 @@ def get_all_coins(client):
     except Exception as e:
         print(f"Error fetching spot symbols: {str(e)}")
     try:
-        futures_info = client.get_instruments_info(category="linear")  # USDT perpetuals on testnet
+        futures_info = client.get_instruments_info(category="linear")
         futures_symbols = [s['symbol'] for s in futures_info['result']['list'] if s['status'] == 'Trading']
     except Exception as e:
         print(f"Error fetching futures symbols: {str(e)}")
@@ -102,7 +88,7 @@ def get_current_price(client, coin, market):
             ticker = client.get_tickers(category="spot", symbol=coin)
             return float(ticker['result']['list'][0]['lastPrice'])
         else:
-            ticker = client.get_tickers(category="linear", symbol=coin)  # USDT perpetuals
+            ticker = client.get_tickers(category="linear", symbol=coin)
             return float(ticker['result']['list'][0]['lastPrice'])
     except Exception as e:
         raise ValueError(f"Failed to get current price for {coin}: {str(e)}")
@@ -110,19 +96,9 @@ def get_current_price(client, coin, market):
 def get_ohlcv_df(client, coin, interval, lookback, market):
     try:
         if market == "spot":
-            klines = client.get_kline(
-                category="spot",
-                symbol=coin,
-                interval=interval,
-                limit=200  # Adjust limit as needed (max 1000 on testnet)
-            )
+            klines = client.get_kline(category="spot", symbol=coin, interval=interval, limit=200)
         else:
-            klines = client.get_kline(
-                category="linear",
-                symbol=coin,
-                interval=interval,
-                limit=200
-            )
+            klines = client.get_kline(category="linear", symbol=coin, interval=interval, limit=200)
         if not klines['result'] or 'list' not in klines['result']:
             raise ValueError(f"No OHLCV data available for {coin}")
         df = pd.DataFrame(klines['result']['list'], columns=['open_time', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
@@ -153,7 +129,7 @@ def compute_rsi(series, period=14):
     loss = -delta.where(delta < 0, 0)
     avg_gain = gain.rolling(period).mean()
     avg_loss = loss.rolling(period).mean()
-    rs = avg_gain / avg_loss.replace(0, 1e-10)  # Avoid division by zero
+    rs = avg_gain / avg_loss.replace(0, 1e-10)
     rsi = 100 - 100 / (1 + rs)
     return rsi.iloc[-1] if not rsi.empty and len(rsi) >= period else 50.0
 
@@ -353,7 +329,7 @@ def detect_chart_patterns(df):
         if p2 < p1 and t2 < t1:
             if abs(slope_peak - slope_trough) < 0.001:
                 patterns.append("Descending Channel")
-            elif p1 - t1 > p2 - t2:  # converging
+            elif p1 - t1 > p2 - t2:
                 patterns.append("Falling Wedge")
                 height = p1 - t1
                 pattern_targets["Falling Wedge"] = df_close.iloc[-1] + height
@@ -361,7 +337,7 @@ def detect_chart_patterns(df):
         if p2 > p1 and t2 > t1:
             if abs(slope_peak - slope_trough) < 0.001:
                 patterns.append("Ascending Channel")
-            elif p2 - t2 < p1 - t1:  # converging
+            elif p2 - t2 < p1 - t1:
                 patterns.append("Rising Wedge")
                 height = p1 - t1
                 pattern_targets["Rising Wedge"] = df_close.iloc[-1] - height
@@ -378,7 +354,7 @@ class AnalysisEngine:
     @staticmethod
     def profitability(position_type, entry_price, current_price, quantity):
         pl = (current_price - entry_price) * quantity if position_type == "long" else (entry_price - current_price) * quantity
-        pl_pct = (pl / (entry_price * quantity)) * 100 if entry_price * quantity != 0 else 0  # Avoid division by zero
+        pl_pct = (pl / (entry_price * quantity)) * 100 if entry_price * quantity != 0 else 0
         if pl_pct > 0.5:
             comment = "Profit above avg move."
         elif pl_pct < -0.5:
@@ -614,12 +590,12 @@ def advisory_pipeline(client, input_json):
         if not info['result']['list']:
             raise ValueError(f"Coin {data['coin']} not found or invalid symbol on Bybit spot market!")
     else:
-        futures_info = client.get_instruments_info(category="linear", symbol=data["coin"])  # USDT perpetuals
+        futures_info = client.get_instruments_info(category="linear", symbol=data["coin"])
         if not futures_info['result']['list']:
             raise ValueError(f"Coin {data['coin']} not found or invalid symbol on Bybit futures market!")
 
     current_price = get_current_price(client, data["coin"], data["market"])
-    df_1d = get_ohlcv_df(client, data["coin"], "D", 200, data["market"])  # Fixed lookback to integer
+    df_1d = get_ohlcv_df(client, data["coin"], "D", 200, data["market"])
 
     atr = compute_atr(df_1d)
     detected_candles = detect_candlestick_patterns(df_1d)
@@ -687,13 +663,20 @@ async def root():
     return {"message": "Welcome to the Trading Analysis API. Use /analyze with POST to analyze positions."}
 
 @app.post("/analyze")
-async def analyze_position(input_data: TradeInput):
+async def analyze_position(input_data: TradeInput, request: Request):
     try:
         client = initialize_client()
         data = input_data.dict()
         validated_data = InputValidator.validate_and_normalize(data)
         result = advisory_pipeline(client, validated_data)
-        return result
+        return JSONResponse(
+            content=result,
+            headers={
+                "Access-Control-Allow-Origin": "https://position-analyzer-app-2eip-qv9hnw0a3-vishals-projects-c3cd8a6a.vercel.app",
+                "Access-Control-Allow-Methods": "POST",
+                "Access-Control-Allow-Headers": "Content-Type"
+            }
+        )
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
