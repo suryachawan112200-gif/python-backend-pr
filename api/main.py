@@ -5,16 +5,17 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
+from fastapi.middleware.cors import CORSMiddleware  # Explicit import
 from fastapi.responses import JSONResponse
 import time
 import os
 
 app = FastAPI()
 
-# Enable CORS (as a fallback, though manual headers will handle it)
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://position-analyzer-app.vercel.app", "http://localhost:3000"],  # Match your frontend origin
+    allow_origins=["https://position-analyzer-ba3td1r1c-vishals-projects-c3cd8a6a.vercel.app", "http://localhost:3000"],  # Frontend domain + local for testing
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -53,7 +54,7 @@ def initialize_client():
             )
             # Test connection with a simple request
             response = client.get_server_time()
-            print(f"Server time response: {response}")
+            print(f"Server time response: {response}")  # Add logging for debugging
             return client
         except Exception as e:
             error_msg = str(e).lower()
@@ -75,7 +76,7 @@ def get_all_coins(client):
     except Exception as e:
         print(f"Error fetching spot symbols: {str(e)}")
     try:
-        futures_info = client.get_instruments_info(category="linear")
+        futures_info = client.get_instruments_info(category="linear")  # USDT perpetuals on testnet
         futures_symbols = [s['symbol'] for s in futures_info['result']['list'] if s['status'] == 'Trading']
     except Exception as e:
         print(f"Error fetching futures symbols: {str(e)}")
@@ -88,7 +89,7 @@ def get_current_price(client, coin, market):
             ticker = client.get_tickers(category="spot", symbol=coin)
             return float(ticker['result']['list'][0]['lastPrice'])
         else:
-            ticker = client.get_tickers(category="linear", symbol=coin)
+            ticker = client.get_tickers(category="linear", symbol=coin)  # USDT perpetuals
             return float(ticker['result']['list'][0]['lastPrice'])
     except Exception as e:
         raise ValueError(f"Failed to get current price for {coin}: {str(e)}")
@@ -96,9 +97,19 @@ def get_current_price(client, coin, market):
 def get_ohlcv_df(client, coin, interval, lookback, market):
     try:
         if market == "spot":
-            klines = client.get_kline(category="spot", symbol=coin, interval=interval, limit=200)
+            klines = client.get_kline(
+                category="spot",
+                symbol=coin,
+                interval=interval,
+                limit=200  # Adjust limit as needed (max 1000 on testnet)
+            )
         else:
-            klines = client.get_kline(category="linear", symbol=coin, interval=interval, limit=200)
+            klines = client.get_kline(
+                category="linear",
+                symbol=coin,
+                interval=interval,
+                limit=200
+            )
         if not klines['result'] or 'list' not in klines['result']:
             raise ValueError(f"No OHLCV data available for {coin}")
         df = pd.DataFrame(klines['result']['list'], columns=['open_time', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
@@ -590,7 +601,7 @@ def advisory_pipeline(client, input_json):
         if not info['result']['list']:
             raise ValueError(f"Coin {data['coin']} not found or invalid symbol on Bybit spot market!")
     else:
-        futures_info = client.get_instruments_info(category="linear", symbol=data["coin"])
+        futures_info = client.get_instruments_info(category="linear", symbol=data["coin"])  # USDT perpetuals
         if not futures_info['result']['list']:
             raise ValueError(f"Coin {data['coin']} not found or invalid symbol on Bybit futures market!")
 
@@ -662,6 +673,17 @@ class TradeInput(BaseModel):
 async def root():
     return {"message": "Welcome to the Trading Analysis API. Use /analyze with POST to analyze positions."}
 
+@app.options("/analyze")
+async def options_analyze(request: Request):
+    return JSONResponse(
+        status_code=200,
+        headers={
+            "Access-Control-Allow-Origin": "https://position-analyzer-ba3td1r1c-vishals-projects-c3cd8a6a.vercel.app",
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
+        }
+    )
+
 @app.post("/analyze")
 async def analyze_position(input_data: TradeInput, request: Request):
     try:
@@ -672,7 +694,7 @@ async def analyze_position(input_data: TradeInput, request: Request):
         return JSONResponse(
             content=result,
             headers={
-                "Access-Control-Allow-Origin": "https://position-analyzer-app.vercel.app",
+                "Access-Control-Allow-Origin": "https://position-analyzer-ba3td1r1c-vishals-projects-c3cd8a6a.vercel.app",
                 "Access-Control-Allow-Methods": "POST",
                 "Access-Control-Allow-Headers": "Content-Type"
             }
