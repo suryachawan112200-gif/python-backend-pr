@@ -15,7 +15,7 @@ app = FastAPI()
 # Enable CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://position-analyzer-ba3td1r1c-vishals-projects-c3cd8a6a.vercel.app", "http://localhost:3000"],  # Frontend domain + local for testing
+    allow_origins=["https://position-analyzer-app.vercel.app", "http://localhost:3000"],  # Frontend domain + local for testing
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
@@ -678,7 +678,7 @@ async def options_analyze(request: Request):
     return JSONResponse(
         status_code=200,
         headers={
-            "Access-Control-Allow-Origin": "https://position-analyzer-ba3td1r1c-vishals-projects-c3cd8a6a.vercel.app",
+            "Access-Control-Allow-Origin": "https://position-analyzer-app.vercel.app",
             "Access-Control-Allow-Methods": "POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type"
         }
@@ -694,7 +694,7 @@ async def analyze_position(input_data: TradeInput, request: Request):
         return JSONResponse(
             content=result,
             headers={
-                "Access-Control-Allow-Origin": "https://position-analyzer-ba3td1r1c-vishals-projects-c3cd8a6a.vercel.app",
+                "Access-Control-Allow-Origin": "https://position-analyzer-app.vercel.app",
                 "Access-Control-Allow-Methods": "POST",
                 "Access-Control-Allow-Headers": "Content-Type"
             }
