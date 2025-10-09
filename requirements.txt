@@ -1,5 +1,6 @@
-pybit>=5.2.0
-pandas
-fastapi
-uvicorn
-pydantic
+fastapi==0.115.0
+uvicorn==0.30.6
+ccxt==4.4.7
+pandas==2.2.2
+pydantic==2.8.2
+python-dotenv==1.0.1
