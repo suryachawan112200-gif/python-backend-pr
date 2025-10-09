@@ -8,10 +8,6 @@
   ],
   "routes": [
     {
-      "src": "/analyze",
-      "dest": "api/main.py"
-    },
-    {
       "src": "/(.*)",
       "dest": "api/main.py"
     }
