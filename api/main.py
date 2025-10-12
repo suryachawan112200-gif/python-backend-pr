@@ -44,6 +44,7 @@ class InputValidator:
         if data["timeframe"] not in InputValidator.VALID_TIMEFRAMES:
             raise ValueError(f"Invalid timeframe. Must be one of: {', '.join(InputValidator.VALID_TIMEFRAMES)}")
         data["has_both_positions"] = data.get("has_both_positions", False)
+        data["risk_pct"] = data.get("risk_pct", 0.02)  # Default 2% risk
         return data
 
 # Bybit Data Fetch
@@ -56,7 +57,6 @@ def initialize_client():
                 api_secret=API_SECRET,
                 testnet=False  # Use mainnet
             )
-            # Test connection with a simple request
             response = client.get_server_time()
             print(f"Server time response: {response}")  # Add logging for debugging
             return client
@@ -106,24 +106,31 @@ def get_interval_mapping(timeframe):
         "1d": "D",
         "1month": "M"
     }
-    return mapping[timeframe]
+    multiplier_adjust = {
+        "5m": 1.0,
+        "15m": 1.5,
+        "4h": 2.0,
+        "1d": 3.0,
+        "1month": 5.0
+    }
+    return mapping[timeframe], multiplier_adjust[timeframe]
 
 def get_ohlcv_df(client, coin, timeframe, lookback, market):
-    interval = get_interval_mapping(timeframe)
+    interval, _ = get_interval_mapping(timeframe)
     try:
         if market == "spot":
             klines = client.get_kline(
                 category="spot",
                 symbol=coin,
                 interval=interval,
-                limit=lookback  # Adjust limit as needed (max 1000)
+                limit=min(lookback, 1000)  # Cap at Bybit's max limit
             )
         else:
             klines = client.get_kline(
                 category="linear",
                 symbol=coin,
                 interval=interval,
-                limit=lookback
+                limit=min(lookback, 1000)
             )
         if not klines['result'] or 'list' not in klines['result']:
             raise ValueError(f"No OHLCV data available for {coin}")
@@ -138,7 +145,6 @@ def get_ohlcv_df(client, coin, timeframe, lookback, market):
         raise ValueError(f"Failed to fetch OHLCV data for {coin}: {str(e)}")
 
 def get_24h_trend_df(client, coin, market):
-    # Fetch last 24 hours using 60m interval, limit=24
     try:
         if market == "spot":
             klines = client.get_kline(
@@ -196,8 +202,7 @@ def compute_macd(series, fast=12, slow=26, signal=9):
     histogram = macd - signal_line
     return (macd.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]) if len(macd) >= signal else (0.0, 0.0, 0.0)
 
-def compute_pivot_points(df, period=15):
-    # Traditional pivot points based on last 'period' candles aggregated
+def compute_pivot_points(df, period=50):
     if len(df) < period:
         period = len(df)
     recent_df = df.tail(period)
@@ -215,35 +220,37 @@ def compute_pivot_points(df, period=15):
     resistances = [r1, r2, r3]
     return supports, resistances, pivot
 
-def detect_support_resistance(df, current_price, entry_price, window=5, lookback=90, tol=0.001):
+def detect_support_resistance(df, current_price, entry_price, window=3, lookback=200, tol=0.005):
     df_close = df['close']
+    df_volume = df['volume']
+    avg_volume = df_volume.rolling(20).mean().iloc[-1] if len(df_volume) >= 20 else df_volume.iloc[-1]
     lows = df['low'].rolling(window, center=True).min()
     highs = df['high'].rolling(window, center=True).max()
-    candidate_supports = df['low'][(df['low'] == lows)].tail(lookback).unique().tolist()
-    candidate_resistances = df['high'][(df['high'] == highs)].tail(lookback).unique().tolist()
+    candidate_supports = df['low'][(df['low'] == lows) & (df['volume'] > avg_volume * 1.0)].tail(lookback).unique().tolist()
+    candidate_resistances = df['high'][(df['high'] == highs) & (df['volume'] > avg_volume * 1.0)].tail(lookback).unique().tolist()
 
     def count_touches(level, series, tol):
-        return sum(abs(series - level) < tol)
+        return sum(abs(series - level) < level * tol)
 
     support_counts = {s: count_touches(s, df_close.tail(lookback), tol) for s in candidate_supports}
     resistance_counts = {r: count_touches(r, df_close.tail(lookback), tol) for r in candidate_resistances}
 
-    supports = [s for s in candidate_supports if support_counts[s] >= 2]
-    resistances = [r for r in candidate_resistances if resistance_counts[r] >= 2]
+    supports = [s for s in candidate_supports if support_counts[s] >= 1]
+    resistances = [r for r in candidate_resistances if resistance_counts[r] >= 1]
 
-    # Add pivot points
     pivot_supports, pivot_resistances, _ = compute_pivot_points(df)
     supports.extend(pivot_supports)
     resistances.extend(pivot_resistances)
 
-    # Remove duplicates and sort
     supports = sorted(list(set(supports)))
     resistances = sorted(list(set(resistances)))
 
-    # Filter to 3 major nearby (below current/entry for supports, above for resistances)
-    avg_price = (current_price + entry_price) / 2
-    nearby_supports = sorted([s for s in supports if s < avg_price], reverse=True)[:3]
-    nearby_resistances = sorted([r for r in resistances if r > avg_price])[:3]
+    # Show closest 3 supports and resistances
+    nearby_supports = sorted(supports, key=lambda s: abs(s - current_price))[:3]
+    nearby_supports = sorted(nearby_supports, reverse=True)  # Highest first
+
+    nearby_resistances = sorted(resistances, key=lambda r: abs(r - current_price))[:3]
+    nearby_resistances = sorted(nearby_resistances)  # Lowest first
 
     return nearby_supports, nearby_resistances
 
@@ -255,34 +262,37 @@ def detect_candlestick_patterns(df):
     high = df['high']
     low = df['low']
     close = df['close']
+    volume = df['volume']
     last_open = open_.iloc[-1]
     last_high = high.iloc[-1]
     last_low = low.iloc[-1]
     last_close = close.iloc[-1]
+    last_volume = volume.iloc[-1]
+    avg_volume = volume.rolling(20).mean().iloc[-1] if len(volume) >= 20 else last_volume
     body = abs(last_open - last_close)
     upper_shadow = last_high - max(last_open, last_close)
     lower_shadow = min(last_open, last_close) - last_low
     total_range = last_high - last_low if last_high > last_low else 1e-6
 
-    if body / total_range < 0.05:
+    if body / total_range < 0.05 and last_volume > avg_volume * 1.5:
         patterns.append("Doji")
-    if lower_shadow > 2 * body and upper_shadow < 0.1 * body and last_close > last_open:
+    if lower_shadow > 2 * body and upper_shadow < 0.1 * body and last_close > last_open and last_volume > avg_volume:
         patterns.append("Hammer")
-    if upper_shadow > 2 * body and lower_shadow < 0.1 * body and last_close > last_open:
+    if upper_shadow > 2 * body and lower_shadow < 0.1 * body and last_close > last_open and last_volume > avg_volume:
         patterns.append("Inverted Hammer")
-    if upper_shadow > 2 * body and lower_shadow < 0.1 * body and last_close < last_open:
+    if upper_shadow > 2 * body and lower_shadow < 0.1 * body and last_close < last_open and last_volume > avg_volume:
         patterns.append("Shooting Star")
-    if lower_shadow > 2 * body and upper_shadow < 0.1 * body and last_close < last_open:
+    if lower_shadow > 2 * body and upper_shadow < 0.1 * body and last_close < last_open and last_volume > avg_volume:
         patterns.append("Hanging Man")
-    if body / total_range < 0.3 and upper_shadow > body and lower_shadow > body:
+    if body / total_range < 0.3 and upper_shadow > body and lower_shadow > body and last_volume > avg_volume:
         patterns.append("Spinning Top")
-    if upper_shadow < 0.05 * body and lower_shadow < 0.05 * body and last_close > last_open:
+    if upper_shadow < 0.05 * body and lower_shadow < 0.05 * body and last_close > last_open and last_volume > avg_volume:
         patterns.append("Bullish Marubozu")
-    if upper_shadow < 0.05 * body and lower_shadow < 0.05 * body and last_close < last_open:
+    if upper_shadow < 0.05 * body and lower_shadow < 0.05 * body and last_close < last_open and last_volume > avg_volume:
         patterns.append("Bearish Marubozu")
-    if lower_shadow < 0.05 * body and last_close > last_open and last_open <= last_low + 0.001 * total_range:
+    if lower_shadow < 0.05 * body and last_close > last_open and last_open <= last_low + 0.001 * total_range and last_volume > avg_volume:
         patterns.append("Bullish Belt Hold")
-    if upper_shadow < 0.05 * body and last_close < last_open and last_open >= last_high - 0.001 * total_range:
+    if upper_shadow < 0.05 * body and last_close < last_open and last_open >= last_high - 0.001 * total_range and last_volume > avg_volume:
         patterns.append("Bearish Belt Hold")
 
     if len(df) >= 2:
@@ -290,23 +300,23 @@ def detect_candlestick_patterns(df):
         prev_close = close.iloc[-2]
         prev_high = high.iloc[-2]
         prev_low = low.iloc[-2]
-
-        if prev_close < prev_open and last_close > prev_open and last_open < prev_close and last_close > last_open:
+        prev_volume = volume.iloc[-2]
+        if prev_close < prev_open and last_close > prev_open and last_open < prev_close and last_close > last_open and last_volume > prev_volume * 1.2:
             patterns.append("Bullish Engulfing")
-        if prev_close > prev_open and last_close < prev_open and last_open > prev_close and last_close < last_open:
+        if prev_close > prev_open and last_close < prev_open and last_open > prev_close and last_close < last_open and last_volume > prev_volume * 1.2:
             patterns.append("Bearish Engulfing")
         mid_prev = (prev_open + prev_close) / 2
-        if prev_close < prev_open and last_open < prev_close and last_close > mid_prev and last_close < prev_open:
+        if prev_close < prev_open and last_open < prev_close and last_close > mid_prev and last_close < prev_open and last_volume > prev_volume:
             patterns.append("Piercing Line")
-        if prev_close > prev_open and last_open > prev_close and last_close < mid_prev and last_close > prev_open:
+        if prev_close > prev_open and last_open > prev_close and last_close < mid_prev and last_close > prev_open and last_volume > prev_volume:
             patterns.append("Dark Cloud Cover")
-        if prev_close < prev_open and last_open > prev_close and last_close < prev_open and last_close > last_open:
+        if prev_close < prev_open and last_open > prev_close and last_close < prev_open and last_close > last_open and last_volume > prev_volume:
             patterns.append("Bullish Harami")
-        if prev_close > prev_open and last_open < prev_close and last_close > prev_open and last_close < last_open:
+        if prev_close > prev_open and last_open < prev_close and last_close > prev_open and last_close < last_open and last_volume > prev_volume:
             patterns.append("Bearish Harami")
-        if abs(last_low - prev_low) < 0.001 * last_low and prev_close < prev_open and last_close > last_open:
+        if abs(last_low - prev_low) < 0.001 * last_low and prev_close < prev_open and last_close > last_open and last_volume > avg_volume:
             patterns.append("Tweezer Bottom")
-        if abs(last_high - prev_high) < 0.001 * last_high and prev_close > prev_open and last_close < last_open:
+        if abs(last_high - prev_high) < 0.001 * last_high and prev_close > prev_open and last_close < last_open and last_volume > avg_volume:
             patterns.append("Tweezer Top")
 
     if len(df) >= 3:
@@ -314,14 +324,14 @@ def detect_candlestick_patterns(df):
         p2_close = close.iloc[-3]
         p1_open = open_.iloc[-2]
         p1_close = close.iloc[-2]
-
-        if p2_close < p2_open and abs(p1_close - p1_open) < 0.3 * abs(p2_close - p2_open) and last_close > last_open and last_close > (p2_open + p2_close) / 2:
+        p1_volume = volume.iloc[-2]
+        if p2_close < p2_open and abs(p1_close - p1_open) < 0.3 * abs(p2_close - p2_open) and last_close > last_open and last_close > (p2_open + p2_close) / 2 and last_volume > p1_volume * 1.2:
             patterns.append("Morning Star")
-        if p2_close > p2_open and abs(p1_close - p1_open) < 0.3 * abs(p2_close - p2_open) and last_close < last_open and last_close < (p2_open + p2_close) / 2:
+        if p2_close > p2_open and abs(p1_close - p1_open) < 0.3 * abs(p2_close - p2_open) and last_close < last_open and last_close < (p2_open + p2_close) / 2 and last_volume > p1_volume * 1.2:
             patterns.append("Evening Star")
-        if all(close.iloc[-i] > open_.iloc[-i] for i in range(1, 4)) and close.iloc[-2] > close.iloc[-3] and close.iloc[-1] > close.iloc[-2]:
+        if all(close.iloc[-i] > open_.iloc[-i] for i in range(1, 4)) and close.iloc[-2] > close.iloc[-3] and close.iloc[-1] > close.iloc[-2] and last_volume > avg_volume:
             patterns.append("Three White Soldiers")
-        if all(close.iloc[-i] < open_.iloc[-i] for i in range(1, 4)) and close.iloc[-2] < close.iloc[-3] and close.iloc[-1] < close.iloc[-2]:
+        if all(close.iloc[-i] < open_.iloc[-i] for i in range(1, 4)) and close.iloc[-2] < close.iloc[-3] and close.iloc[-1] < close.iloc[-2] and last_volume > avg_volume:
             patterns.append("Three Black Crows")
 
     return patterns
@@ -339,30 +349,43 @@ def detect_chart_patterns(df):
     pattern_sls = {}
     peak_indices = get_peak_indices(df_close)[-10:]
     trough_indices = get_trough_indices(df_close)[-10:]
+    current = df_close.iloc[-1]
 
     if len(peak_indices) >= 2:
         p1_idx = peak_indices[-2]
         p2_idx = peak_indices[-1]
         p1 = df_close[p1_idx]
         p2 = df_close[p2_idx]
-        if abs(p1 - p2) / ((p1 + p2) / 2) < 0.02:
+        if abs(p1 - p2) / ((p1 + p2) / 2) < 0.015:  # Tightened threshold
             patterns.append("Double Top")
             neckline = min(df_close[p1_idx:p2_idx])
             height = p1 - neckline
             pattern_targets["Double Top"] = neckline - height
-            pattern_sls["Double Top"] = max(p1, p2) + height * 0.1  # Conservative SL above peaks
+            pattern_sls["Double Top"] = max(p1, p2) + height * 0.1
+            tgt = pattern_targets["Double Top"]
+            sl = pattern_sls["Double Top"]
+            if not (current > tgt and current < sl):
+                patterns.remove("Double Top")
+                del pattern_targets["Double Top"]
+                del pattern_sls["Double Top"]
 
     if len(trough_indices) >= 2:
         t1_idx = trough_indices[-2]
         t2_idx = trough_indices[-1]
         t1 = df_close[t1_idx]
         t2 = df_close[t2_idx]
-        if abs(t1 - t2) / ((t1 + t2) / 2) < 0.02:
+        if abs(t1 - t2) / ((t1 + t2) / 2) < 0.015:  # Tightened threshold
             patterns.append("Double Bottom")
             neckline = max(df_close[t1_idx:t2_idx])
             height = neckline - t1
             pattern_targets["Double Bottom"] = neckline + height
-            pattern_sls["Double Bottom"] = min(t1, t2) - height * 0.1  # Conservative SL below troughs
+            pattern_sls["Double Bottom"] = min(t1, t2) - height * 0.1
+            tgt = pattern_targets["Double Bottom"]
+            sl = pattern_sls["Double Bottom"]
+            if not (current < tgt and current > sl):
+                patterns.remove("Double Bottom")
+                del pattern_targets["Double Bottom"]
+                del pattern_sls["Double Bottom"]
 
     if len(peak_indices) >= 3:
         p1_idx = peak_indices[-3]
@@ -371,14 +394,30 @@ def detect_chart_patterns(df):
         p1 = df_close[p1_idx]
         p2 = df_close[p2_idx]
         p3 = df_close[p3_idx]
-        if max(abs(p1 - p2), abs(p2 - p3), abs(p1 - p3)) / ((p1 + p2 + p3) / 3) < 0.02:
+        if max(abs(p1 - p2), abs(p2 - p3), abs(p1 - p3)) / ((p1 + p2 + p3) / 3) < 0.015:  # Tightened threshold
             patterns.append("Triple Top")
+            neckline = df_close[p1_idx:p3_idx+1].min()
+            height = (p1 + p2 + p3)/3 - neckline
+            pattern_targets["Triple Top"] = neckline - height
+            pattern_sls["Triple Top"] = max(p1, p2, p3) + height * 0.1
+            tgt = pattern_targets["Triple Top"]
+            sl = pattern_sls["Triple Top"]
+            if not (current > tgt and current < sl):
+                patterns.remove("Triple Top")
+                del pattern_targets["Triple Top"]
+                del pattern_sls["Triple Top"]
         if p2 > p1 and p2 > p3 and abs(p1 - p3) / p2 < 0.02:
             patterns.append("Head and Shoulders")
             neckline = (p1 + p3) / 2
             height = p2 - neckline
             pattern_targets["Head and Shoulders"] = neckline - height
             pattern_sls["Head and Shoulders"] = p2 + height * 0.1
+            tgt = pattern_targets["Head and Shoulders"]
+            sl = pattern_sls["Head and Shoulders"]
+            if not (current > tgt and current < sl):
+                patterns.remove("Head and Shoulders")
+                del pattern_targets["Head and Shoulders"]
+                del pattern_sls["Head and Shoulders"]
 
     if len(trough_indices) >= 3:
         t1_idx = trough_indices[-3]
@@ -387,14 +426,30 @@ def detect_chart_patterns(df):
         t1 = df_close[t1_idx]
         t2 = df_close[t2_idx]
         t3 = df_close[t3_idx]
-        if max(abs(t1 - t2), abs(t2 - t3), abs(t1 - t3)) / ((t1 + t2 + t3) / 3) < 0.02:
+        if max(abs(t1 - t2), abs(t2 - t3), abs(t1 - t3)) / ((t1 + t2 + t3) / 3) < 0.015:  # Tightened threshold
             patterns.append("Triple Bottom")
+            neckline = df_close[t1_idx:t3_idx+1].max()
+            height = neckline - (t1 + t2 + t3)/3
+            pattern_targets["Triple Bottom"] = neckline + height
+            pattern_sls["Triple Bottom"] = min(t1, t2, t3) - height * 0.1
+            tgt = pattern_targets["Triple Bottom"]
+            sl = pattern_sls["Triple Bottom"]
+            if not (current < tgt and current > sl):
+                patterns.remove("Triple Bottom")
+                del pattern_targets["Triple Bottom"]
+                del pattern_sls["Triple Bottom"]
         if t2 < t1 and t2 < t3 and abs(t1 - t3) / abs(t2) < 0.02:
             patterns.append("Inverse Head and Shoulders")
             neckline = (t1 + t3) / 2
             height = neckline - t2
             pattern_targets["Inverse Head and Shoulders"] = neckline + height
             pattern_sls["Inverse Head and Shoulders"] = t2 - height * 0.1
+            tgt = pattern_targets["Inverse Head and Shoulders"]
+            sl = pattern_sls["Inverse Head and Shoulders"]
+            if not (current < tgt and current > sl):
+                patterns.remove("Inverse Head and Shoulders")
+                del pattern_targets["Inverse Head and Shoulders"]
+                del pattern_sls["Inverse Head and Shoulders"]
 
     if len(peak_indices) >= 2 and len(trough_indices) >= 2:
         p1_idx = peak_indices[-2]
@@ -413,11 +468,19 @@ def detect_chart_patterns(df):
             patterns.append("Ascending Triangle")
             height = p1 - t1
             pattern_targets["Ascending Triangle"] = p2 + height
+            tgt = pattern_targets["Ascending Triangle"]
+            if not (current < tgt):
+                patterns.remove("Ascending Triangle")
+                del pattern_targets["Ascending Triangle"]
 
         if abs(t2 - t1) / df_close.mean() < 0.01 and p2 < p1:
             patterns.append("Descending Triangle")
             height = p1 - t1
             pattern_targets["Descending Triangle"] = t2 - height
+            tgt = pattern_targets["Descending Triangle"]
+            if not (current > tgt):
+                patterns.remove("Descending Triangle")
+                del pattern_targets["Descending Triangle"]
 
         if p2 < p1 and t2 > t1:
             patterns.append("Symmetrical Triangle")
@@ -430,6 +493,12 @@ def detect_chart_patterns(df):
                 height = p1 - t1
                 pattern_targets["Falling Wedge"] = df_close.iloc[-1] + height
                 pattern_sls["Falling Wedge"] = min(t1, t2) - height * 0.1
+                tgt = pattern_targets["Falling Wedge"]
+                sl = pattern_sls["Falling Wedge"]
+                if not (current < tgt and current > sl):
+                    patterns.remove("Falling Wedge")
+                    del pattern_targets["Falling Wedge"]
+                    del pattern_sls["Falling Wedge"]
 
         if p2 > p1 and t2 > t1:
             if abs(slope_peak - slope_trough) < 0.001:
@@ -439,6 +508,12 @@ def detect_chart_patterns(df):
                 height = p1 - t1
                 pattern_targets["Rising Wedge"] = df_close.iloc[-1] - height
                 pattern_sls["Rising Wedge"] = max(p1, p2) + height * 0.1
+                tgt = pattern_targets["Rising Wedge"]
+                sl = pattern_sls["Rising Wedge"]
+                if not (current > tgt and current < sl):
+                    patterns.remove("Rising Wedge")
+                    del pattern_targets["Rising Wedge"]
+                    del pattern_sls["Rising Wedge"]
 
     return patterns, pattern_targets, pattern_sls
 
@@ -521,7 +596,6 @@ class AnalysisEngine:
         ma50 = compute_ma(close, 50).iloc[-1] if len(close) >= 50 else close.iloc[-1] if not close.empty else 0.0
         last_close = close.iloc[-1] if not close.empty else 0.0
 
-        # Improved 24h trend
         if not df_24h.empty:
             open_24h = df_24h['open'].iloc[0]
             close_24h = df_24h['close'].iloc[-1]
@@ -604,77 +678,81 @@ class AnalysisEngine:
         return multiplier, extra_conf, pattern_comment
 
     @staticmethod
-    def target_stoploss(dominant_bias, supports, resistances, entry_price, pattern_targets, pattern_sls, atr, current_price, max_diff=100):
+    def target_stoploss(dominant_bias, supports, resistances, entry_price, pattern_targets, pattern_sls, atr, current_price, max_diff=100, df_ohlcv=None):
         targets = []
         stoplosses = []
+        trend_strength = abs((compute_ema(df_ohlcv['close'], 20).iloc[-1] - compute_ma(df_ohlcv['close'], 50).iloc[-1]) / compute_ma(df_ohlcv['close'], 50).iloc[-1]) if df_ohlcv is not None and compute_ma(df_ohlcv['close'], 50).iloc[-1] != 0 else 0.0
+        adjustment = 1.0 + trend_strength * 2  # Stronger trend = wider range
+        _, timeframe_multiplier = get_interval_mapping(timeframe)  # Access timeframe from outer scope
+
         if dominant_bias == "long":
-            potential_tgts = sorted([r for r in resistances if r > entry_price])
-            potential_sls = sorted([s for s in supports if s < entry_price], reverse=True)
+            potential_tgts = sorted([r for r in resistances if r > current_price])  # Changed to > current_price
+            potential_sls = sorted([s for s in supports if s < current_price], reverse=True)  # < current_price
             if potential_tgts:
                 tgt1 = potential_tgts[0]
                 targets.append(tgt1)
                 for t in potential_tgts[1:]:
-                    if t - tgt1 <= max_diff * 1.5:  # Improved spacing
+                    if t - tgt1 <= max_diff * 1.5 * timeframe_multiplier * adjustment:
                         targets.append(t)
                     if len(targets) >= 2:
                         break
             else:
-                tgt1 = entry_price + atr * 2.5  # Adjusted multiplier
+                tgt1 = current_price + atr * 2.5 * timeframe_multiplier * adjustment  # Changed to current_price
                 targets.append(tgt1)
-                tgt2 = entry_price + atr * 5
+                tgt2 = current_price + atr * 5 * timeframe_multiplier * adjustment
                 targets.append(tgt2)
             if potential_sls:
                 sl1 = potential_sls[0]
                 stoplosses.append(sl1)
                 for s in potential_sls[1:]:
-                    if sl1 - s <= max_diff:
+                    if sl1 - s <= max_diff * timeframe_multiplier * adjustment:
                         stoplosses.append(s)
                     if len(stoplosses) >= 2:
                         break
             else:
-                sl1 = entry_price - atr * 1.5  # Tighter SL for better RR
+                sl1 = current_price - atr * 1.5 * timeframe_multiplier * adjustment  # Changed to current_price
                 stoplosses.append(sl1)
             for pat, ptgt in pattern_targets.items():
-                if pat in AnalysisEngine.bullish_charts and ptgt > entry_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
+                if pat in AnalysisEngine.bullish_charts and ptgt > current_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):  # Changed to > current_price
                     if len(targets) < 3:
                         targets.append(ptgt)
             for pat, psl in pattern_sls.items():
-                if pat in AnalysisEngine.bullish_charts and psl < entry_price and (not stoplosses or abs(psl - stoplosses[-1]) > atr / 2):
+                if pat in AnalysisEngine.bullish_charts and psl < current_price and (not stoplosses or abs(psl - stoplosses[-1]) > atr / 2):  # < current_price
                     if len(stoplosses) < 3:
                         stoplosses.append(psl)
         elif dominant_bias == "short":
-            potential_tgts = sorted([s for s in supports if s < entry_price], reverse=True)
-            potential_sls = sorted([r for r in resistances if r > entry_price])
+            potential_tgts = sorted([s for s in supports if s < current_price], reverse=True)  # Changed to < current_price, reverse=True for highest first (closest)
+            potential_sls = sorted([r for r in resistances if r > current_price])  # > current_price
             if potential_tgts:
                 tgt1 = potential_tgts[0]
                 targets.append(tgt1)
                 for t in potential_tgts[1:]:
-                    if tgt1 - t <= max_diff * 1.5:
+                    if tgt1 - t <= max_diff * 1.5 * timeframe_multiplier * adjustment:
                         targets.append(t)
                     if len(targets) >= 2:
                         break
             else:
-                tgt1 = entry_price - atr * 2.5
+                tgt1 = current_price - atr * 2.5 * timeframe_multiplier * adjustment  # Changed to current_price
                 targets.append(tgt1)
-                tgt2 = entry_price - atr * 5
+                tgt2 = current_price - atr * 5 * timeframe_multiplier * adjustment
                 targets.append(tgt2)
             if potential_sls:
                 sl1 = potential_sls[0]
                 stoplosses.append(sl1)
                 for s in potential_sls[1:]:
-                    if s - sl1 <= max_diff:
+                    if s - sl1 <= max_diff * timeframe_multiplier * adjustment:
                         stoplosses.append(s)
                     if len(stoplosses) >= 2:
                         break
             else:
-                sl1 = entry_price + atr * 1.5
+                sl1 = current_price + atr * 1.5 * timeframe_multiplier * adjustment  # Changed to current_price
                 stoplosses.append(sl1)
             for pat, ptgt in pattern_targets.items():
-                if pat in AnalysisEngine.bearish_charts and ptgt < entry_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
+                if pat in AnalysisEngine.bearish_charts and ptgt < current_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):  # < current_price
                     if len(targets) < 3:
                         targets.append(ptgt)
             for pat, psl in pattern_sls.items():
-                if pat in AnalysisEngine.bearish_charts and psl > entry_price and (not stoplosses or abs(psl - stoplosses[-1]) > atr / 2):
+                if pat in AnalysisEngine.bearish_charts and psl > current_price and (not stoplosses or abs(psl - stoplosses[-1]) > atr / 2):  # > current_price
                     if len(stoplosses) < 3:
                         stoplosses.append(psl)
         else:
@@ -686,8 +764,7 @@ class AnalysisEngine:
         return sorted(set(targets)), sorted(set(stoplosses))
 
     @staticmethod
-    def calculate_user_sl(dominant_bias, entry_price, supports, resistances, atr):
-        risk_pct = random.choice([0.01, 0.02, 0.03])  # Tighter risk for better honesty
+    def calculate_user_sl(dominant_bias, entry_price, supports, resistances, atr, risk_pct):
         tol = atr * 0.5
         if dominant_bias == "long":
             user_sl_raw = entry_price * (1 - risk_pct)
@@ -716,7 +793,9 @@ class AnalysisEngine:
 
 # Main Pipeline
 def advisory_pipeline(client, input_json):
+    global timeframe  # Access timeframe for target_stoploss
     data = InputValidator.validate_and_normalize(input_json)
+    timeframe = data["timeframe"]  # Store for use in target_stoploss
 
     if data["market"] == "spot":
         info = client.get_instruments_info(category="spot", symbol=data["coin"])
@@ -728,12 +807,14 @@ def advisory_pipeline(client, input_json):
             raise ValueError(f"Coin {data['coin']} not found or invalid symbol on Bybit futures market!")
 
     current_price = get_current_price(client, data["coin"], data["market"])
-    df_ohlcv = get_ohlcv_df(client, data["coin"], data["timeframe"], 200, data["market"])
+    df_ohlcv = get_ohlcv_df(client, data["coin"], data["timeframe"], 500, data["market"])
     df_24h = get_24h_trend_df(client, data["coin"], data["market"])
 
     atr = compute_atr(df_ohlcv)
     detected_candles = detect_candlestick_patterns(df_ohlcv)
     detected_charts, pattern_targets, pattern_sls = detect_chart_patterns(df_ohlcv)
+
+    # Filter chart patterns to match dominant bias (determined later, but filter after)
     profit_loss, profit_comment = AnalysisEngine.profitability(data["position_type"], data["entry_price"], current_price, data["quantity"])
     trend, trend_conf, trend_comment = AnalysisEngine.market_trend(df_ohlcv, df_24h)
     dominant_bias, long_conf, short_conf, trend_pattern_comment = AnalysisEngine.determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts)
@@ -747,12 +828,19 @@ def advisory_pipeline(client, input_json):
         if dominant_bias != "neutral" and dominant_bias != data["position_type"]:
             warning = f"Your {data['position_type']} position opposes the {dominant_bias} trend—consider exiting to align with market momentum."
 
+    # Filter detected_charts to only those matching dominant_bias
+    if dominant_bias == "long":
+        detected_charts = [p for p in detected_charts if p in AnalysisEngine.bullish_charts]
+    elif dominant_bias == "short":
+        detected_charts = [p for p in detected_charts if p in AnalysisEngine.bearish_charts]
+    # Neutral: keep all
+
     multiplier, extra_conf, pattern_comment = AnalysisEngine.adjust_based_on_patterns(analysis_bias, detected_candles, detected_charts, trend_conf, df_ohlcv, atr)
     tol = atr * 0.5
     supports, resistances = detect_support_resistance(df_ohlcv, current_price, data["entry_price"], tol=tol)
     max_diff = atr * 5
-    targets, stoplosses = AnalysisEngine.target_stoploss(analysis_bias, supports, resistances, data["entry_price"], pattern_targets, pattern_sls, atr, current_price, max_diff=max_diff)
-    user_sl = AnalysisEngine.calculate_user_sl(analysis_bias, data["entry_price"], supports, resistances, atr)
+    targets, stoplosses = AnalysisEngine.target_stoploss(analysis_bias, supports, resistances, data["entry_price"], pattern_targets, pattern_sls, atr, current_price, max_diff=max_diff, df_ohlcv=df_ohlcv)
+    user_sl = AnalysisEngine.calculate_user_sl(analysis_bias, data["entry_price"], supports, resistances, atr, data["risk_pct"])
     rr_ratios = AnalysisEngine.calculate_rr_ratios(analysis_bias, data["entry_price"], targets, user_sl)
 
     recommended_action = "Go long" if dominant_bias == "long" else "Go short" if dominant_bias == "short" else "Stay neutral/avoid new positions"
@@ -793,6 +881,7 @@ class TradeInput(BaseModel):
     position_type: str
     timeframe: str
     has_both_positions: Optional[bool] = False
+    risk_pct: Optional[float] = 0.02  # Added configurable risk percentage
 
 @app.get("/")
 async def root():
