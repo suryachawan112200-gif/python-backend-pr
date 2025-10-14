@@ -537,141 +537,151 @@ class AnalysisEngine:
         return f"{pl:+.4f} ({pl_pct:.2f}%)", comment
 
     @staticmethod
-def determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts, timeframe="1h"):  # Pass timeframe
-    trend, confidence, comment = AnalysisEngine.market_trend(df_ohlcv, df_24h, timeframe)
-    rsi = compute_rsi(df_ohlcv['close'])
-    macd, signal, hist = compute_macd(df_ohlcv['close'])
+    def market_trend(df_ohlcv, df_24h, timeframe="1h"):  # Add timeframe param for scaling
+        close = df_ohlcv['close']
+        ema20 = compute_ema(close, 20).iloc[-1] if len(close) >= 20 else close.iloc[-1] if not close.empty else 0.0
+        ma50 = compute_ma(close, 50).iloc[-1] if len(close) >= 50 else close.iloc[-1] if not close.empty else 0.0
+        last_close = close.iloc[-1] if not close.empty else 0.0
 
-    bullish_score = 0
-    bearish_score = 0
-
-    # NEW: Price-based scoring (heavier weight to follow trend)
-    _, timeframe_multiplier = get_interval_mapping(timeframe)
-    price_threshold_strong = 3.0 * timeframe_multiplier
-    price_threshold_weak = 1.5 * timeframe_multiplier
-    if abs(daily_move_pct) > price_threshold_strong:  # Wait, daily_move_pct not defined here—fix by passing or recompute
-        # (Quick fix: Recompute daily_move_pct here or pass from market_trend. For brevity, assume recompute as in market_trend)
-        # Placeholder: recompute daily_move_pct same as above...
-        if daily_move_pct > 0:
-            bullish_score += 3  # Heavy weight for strong bull move
+        if not df_24h.empty:
+            open_24h = df_24h['open'].iloc[0]
+            close_24h = df_24h['close'].iloc[-1]
+            daily_move_pct = ((close_24h - open_24h) / open_24h) * 100 if open_24h != 0 else 0.0
         else:
-            bearish_score += 3  # Heavy for strong bear
-    elif abs(daily_move_pct) > price_threshold_weak:
-        if daily_move_pct > 0:
+            prev_close = close.iloc[-2] if len(close) > 1 else last_close
+            daily_move_pct = ((last_close - prev_close) / prev_close) * 100 if prev_close != 0 else 0.0
+
+        # Scale threshold by timeframe (shorter TF = slightly higher vol tolerance)
+        _, timeframe_multiplier = get_interval_mapping(timeframe)
+        price_threshold_strong = 3.0 * timeframe_multiplier  # e.g., 3% for 5m, 4.5% for 15m, 9% for 1month
+        price_threshold_weak = 1.5 * timeframe_multiplier  # Half for weak signals
+
+        trend = "sideways"
+        confidence = 60
+        comment = "Market moving sideways."
+
+        # PRIORITIZE STRONG PRICE MOVES: Follow price direction if >3% (scaled)
+        if abs(daily_move_pct) > price_threshold_strong:
+            if daily_move_pct > 0:
+                trend = "bullish"
+                confidence = 90  # Higher conf for strong moves
+                comment = "Strong 24h price surge; momentum dominant."
+            else:
+                trend = "bearish"
+                confidence = 90
+                comment = "Strong 24h price drop; momentum dominant."
+        # FALLBACK TO COMBINED SIGNALS FOR WEAKER MOVES
+        elif daily_move_pct > price_threshold_weak and ema20 > ma50:
+            trend = "bullish"
+            confidence = 85
+            comment = "24h move and EMA bullish; momentum strong."
+        elif daily_move_pct < -price_threshold_weak and ema20 < ma50:
+            trend = "bearish"
+            confidence = 85
+            comment = "24h move and EMA bearish; momentum strong."
+        else:
+            # Possible reversal: Neutral comment, no bias keyword
+            if ema20 < ma50 and daily_move_pct > 0:
+                trend = "possible reversal"
+                confidence = 70
+                comment = "Mixed: Bearish indicators but positive price move."
+            elif ema20 > ma50 and daily_move_pct < 0:
+                trend = "possible reversal"
+                confidence = 70
+                comment = "Mixed: Bullish indicators but negative price move."
+            else:
+                trend = "sideways"
+                confidence = 60
+                comment = "Balanced signals; range-bound."
+
+        return trend, confidence, comment
+
+    @staticmethod
+    def determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts, timeframe="1h"):  # Pass timeframe
+        # Recompute daily_move_pct here (duplicate for simplicity; could pass from market_trend)
+        close = df_ohlcv['close']
+        last_close = close.iloc[-1] if not close.empty else 0.0
+        if not df_24h.empty:
+            open_24h = df_24h['open'].iloc[0]
+            close_24h = df_24h['close'].iloc[-1]
+            daily_move_pct = ((close_24h - open_24h) / open_24h) * 100 if open_24h != 0 else 0.0
+        else:
+            prev_close = close.iloc[-2] if len(close) > 1 else last_close
+            daily_move_pct = ((last_close - prev_close) / prev_close) * 100 if prev_close != 0 else 0.0
+
+        trend, confidence, comment = AnalysisEngine.market_trend(df_ohlcv, df_24h, timeframe)
+        rsi = compute_rsi(df_ohlcv['close'])
+        macd, signal, hist = compute_macd(df_ohlcv['close'])
+
+        bullish_score = 0
+        bearish_score = 0
+
+        # NEW: Price-based scoring (heavier weight to follow trend)
+        _, timeframe_multiplier = get_interval_mapping(timeframe)
+        price_threshold_strong = 3.0 * timeframe_multiplier
+        price_threshold_weak = 1.5 * timeframe_multiplier
+        if abs(daily_move_pct) > price_threshold_strong:
+            if daily_move_pct > 0:
+                bullish_score += 3  # Heavy weight for strong bull move
+            else:
+                bearish_score += 3  # Heavy for strong bear
+        elif abs(daily_move_pct) > price_threshold_weak:
+            if daily_move_pct > 0:
+                bullish_score += 1
+            else:
+                bearish_score += 1
+
+        # Existing trend scoring (now secondary)
+        if trend == "bullish":
+            bullish_score += 2
+        elif trend == "bearish":
+            bearish_score += 2
+        elif trend == "possible reversal":
+            # Follow PRICE direction in reversal (not indicators)
+            if daily_move_pct > 0:
+                bullish_score += 1
+            else:
+                bearish_score += 1
+
+        # Existing +1 scores (unchanged, lower weight)
+        if rsi < 30:
             bullish_score += 1
-        else:
+        elif rsi > 70:
             bearish_score += 1
 
-    # Existing trend scoring (now secondary)
-    if trend == "bullish":
-        bullish_score += 2
-    elif trend == "bearish":
-        bearish_score += 2
-    elif trend == "possible reversal":
-        # Follow PRICE direction in reversal (not indicators)
-        if daily_move_pct > 0:
+        if macd > signal and hist > 0:
             bullish_score += 1
-        else:
+        elif macd < signal and hist < 0:
             bearish_score += 1
 
-    # Existing +1 scores (unchanged, lower weight)
-    if rsi < 30:
-        bullish_score += 1
-    elif rsi > 70:
-        bearish_score += 1
+        bullish_pattern = any(p in AnalysisEngine.bullish_candles for p in detected_candles) or any(p in AnalysisEngine.bullish_charts for p in detected_charts)
+        bearish_pattern = any(p in AnalysisEngine.bearish_candles for p in detected_candles) or any(p in AnalysisEngine.bearish_charts for p in detected_charts)
 
-    if macd > signal and hist > 0:
-        bullish_score += 1
-    elif macd < signal and hist < 0:
-        bearish_score += 1
+        if bullish_pattern:
+            bullish_score += 1
+        if bearish_pattern:
+            bearish_score += 1
 
-    bullish_pattern = any(p in AnalysisEngine.bullish_candles for p in detected_candles) or any(p in AnalysisEngine.bullish_charts for p in detected_charts)
-    bearish_pattern = any(p in AnalysisEngine.bearish_candles for p in detected_candles) or any(p in AnalysisEngine.bearish_charts for p in detected_charts)
-
-    if bullish_pattern:
-        bullish_score += 1
-    if bearish_pattern:
-        bearish_score += 1
-
-    total_score = bullish_score + bearish_score
-    if total_score == 0:
-        long_conf = 50
-        short_conf = 50
-        dominant_bias = "neutral"
-        pattern_comment = "Mixed signals; market is sideways/neutral."
-    else:
-        long_conf = int((bullish_score / total_score) * 100)
-        short_conf = 100 - long_conf
-        if bullish_score > bearish_score:
-            dominant_bias = "long"
-            pattern_comment = "Overall bullish trend detected."
-        elif bearish_score > bullish_score:
-            dominant_bias = "short"
-            pattern_comment = "Overall bearish trend detected."
-        else:
+        total_score = bullish_score + bearish_score
+        if total_score == 0:
+            long_conf = 50
+            short_conf = 50
             dominant_bias = "neutral"
             pattern_comment = "Mixed signals; market is sideways/neutral."
-
-    return dominant_bias, long_conf, short_conf, pattern_comment + f" (Bullish score: {bullish_score}, Bearish score: {bearish_score})"
-    @staticmethod
-    def market_trend(df_ohlcv, df_24h, timeframe="1h"):  # Add timeframe param for scaling
-    close = df_ohlcv['close']
-    ema20 = compute_ema(close, 20).iloc[-1] if len(close) >= 20 else close.iloc[-1] if not close.empty else 0.0
-    ma50 = compute_ma(close, 50).iloc[-1] if len(close) >= 50 else close.iloc[-1] if not close.empty else 0.0
-    last_close = close.iloc[-1] if not close.empty else 0.0
-
-    if not df_24h.empty:
-        open_24h = df_24h['open'].iloc[0]
-        close_24h = df_24h['close'].iloc[-1]
-        daily_move_pct = ((close_24h - open_24h) / open_24h) * 100 if open_24h != 0 else 0.0
-    else:
-        prev_close = close.iloc[-2] if len(close) > 1 else last_close
-        daily_move_pct = ((last_close - prev_close) / prev_close) * 100 if prev_close != 0 else 0.0
-
-    # Scale threshold by timeframe (shorter TF = slightly higher vol tolerance)
-    _, timeframe_multiplier = get_interval_mapping(timeframe)
-    price_threshold_strong = 3.0 * timeframe_multiplier  # e.g., 3% for 5m, 4.5% for 15m, 9% for 1month
-    price_threshold_weak = 1.5 * timeframe_multiplier  # Half for weak signals
-
-    trend = "sideways"
-    confidence = 60
-    comment = "Market moving sideways."
-
-    # PRIORITIZE STRONG PRICE MOVES: Follow price direction if >3% (scaled)
-    if abs(daily_move_pct) > price_threshold_strong:
-        if daily_move_pct > 0:
-            trend = "bullish"
-            confidence = 90  # Higher conf for strong moves
-            comment = "Strong 24h price surge; momentum dominant."
         else:
-            trend = "bearish"
-            confidence = 90
-            comment = "Strong 24h price drop; momentum dominant."
-    # FALLBACK TO COMBINED SIGNALS FOR WEAKER MOVES
-    elif daily_move_pct > price_threshold_weak and ema20 > ma50:
-        trend = "bullish"
-        confidence = 85
-        comment = "24h move and EMA bullish; momentum strong."
-    elif daily_move_pct < -price_threshold_weak and ema20 < ma50:
-        trend = "bearish"
-        confidence = 85
-        comment = "24h move and EMA bearish; momentum strong."
-    else:
-        # Possible reversal: Neutral comment, no bias keyword
-        if ema20 < ma50 and daily_move_pct > 0:
-            trend = "possible reversal"
-            confidence = 70
-            comment = "Mixed: Bearish indicators but positive price move."
-        elif ema20 > ma50 and daily_move_pct < 0:
-            trend = "possible reversal"
-            confidence = 70
-            comment = "Mixed: Bullish indicators but negative price move."
-        else:
-            trend = "sideways"
-            confidence = 60
-            comment = "Balanced signals; range-bound."
+            long_conf = int((bullish_score / total_score) * 100)
+            short_conf = 100 - long_conf
+            if bullish_score > bearish_score:
+                dominant_bias = "long"
+                pattern_comment = "Overall bullish trend detected."
+            elif bearish_score > bullish_score:
+                dominant_bias = "short"
+                pattern_comment = "Overall bearish trend detected."
+            else:
+                dominant_bias = "neutral"
+                pattern_comment = "Mixed signals; market is sideways/neutral."
 
-    return trend, confidence, comment
+        return dominant_bias, long_conf, short_conf, pattern_comment + f" (Bullish score: {bullish_score}, Bearish score: {bearish_score})"
 
     @staticmethod
     def adjust_based_on_patterns(dominant_bias, detected_candles, detected_charts, trend_conf, df_ohlcv, atr):
@@ -861,8 +871,8 @@ def advisory_pipeline(client, input_json):
 
     # Filter chart patterns to match dominant bias (determined later, but filter after)
     profit_loss, profit_comment = AnalysisEngine.profitability(data["position_type"], data["entry_price"], current_price, data["quantity"])
-    trend, trend_conf, trend_comment = AnalysisEngine.market_trend(df_ohlcv, df_24h)
-    dominant_bias, long_conf, short_conf, trend_pattern_comment = AnalysisEngine.determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts)
+    trend, trend_conf, trend_comment = AnalysisEngine.market_trend(df_ohlcv, df_24h, data["timeframe"])
+    dominant_bias, long_conf, short_conf, trend_pattern_comment = AnalysisEngine.determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts, data["timeframe"])
 
     if data["has_both_positions"]:
         analysis_bias = dominant_bias
