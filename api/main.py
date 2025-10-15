@@ -232,11 +232,11 @@ def detect_support_resistance(df, current_price, entry_price, window=3, lookback
     def count_touches(level, series, tol):
         return sum(abs(series - level) < level * tol)
 
-    support_counts = {s: count_touches(s, df_close.tail(lookback), tol) for s in candidate_supports}
-    resistance_counts = {r: count_touches(r, df_close.tail(lookback), tol) for r in candidate_resistances}
+    support_counts = {s: count_touches(s, df_close.tail(lookback), tol) for s in candidate_supports if candidate_supports}  # Check if list is not empty
+    resistance_counts = {r: count_touches(r, df_close.tail(lookback), tol) for r in candidate_resistances if candidate_resistances}
 
-    supports = [s for s in candidate_supports if support_counts[s] >= 1]
-    resistances = [r for r in candidate_resistances if resistance_counts[r] >= 1]
+    supports = [s for s in candidate_supports if support_counts.get(s, 0) >= 1] if candidate_supports else [current_price - compute_atr(df)]  # Fallback
+    resistances = [r for r in candidate_resistances if resistance_counts.get(r, 0) >= 1] if candidate_resistances else [current_price + compute_atr(df)]  # Fallback
 
     pivot_supports, pivot_resistances, _ = compute_pivot_points(df)
     supports.extend(pivot_supports)
@@ -366,8 +366,8 @@ def detect_chart_patterns(df):
             sl = pattern_sls["Double Top"]
             if not (current > tgt and current < sl):
                 patterns.remove("Double Top")
-                del pattern_targets["Double Top"]
-                del pattern_sls["Double Top"]
+                if "Double Top" in pattern_targets: del pattern_targets["Double Top"]
+                if "Double Top" in pattern_sls: del pattern_sls["Double Top"]
 
     if len(trough_indices) >= 2:
         t1_idx = trough_indices[-2]
@@ -384,8 +384,8 @@ def detect_chart_patterns(df):
             sl = pattern_sls["Double Bottom"]
             if not (current < tgt and current > sl):
                 patterns.remove("Double Bottom")
-                del pattern_targets["Double Bottom"]
-                del pattern_sls["Double Bottom"]
+                if "Double Bottom" in pattern_targets: del pattern_targets["Double Bottom"]
+                if "Double Bottom" in pattern_sls: del pattern_sls["Double Bottom"]
 
     if len(peak_indices) >= 3:
         p1_idx = peak_indices[-3]
@@ -404,8 +404,8 @@ def detect_chart_patterns(df):
             sl = pattern_sls["Triple Top"]
             if not (current > tgt and current < sl):
                 patterns.remove("Triple Top")
-                del pattern_targets["Triple Top"]
-                del pattern_sls["Triple Top"]
+                if "Triple Top" in pattern_targets: del pattern_targets["Triple Top"]
+                if "Triple Top" in pattern_sls: del pattern_sls["Triple Top"]
         if p2 > p1 and p2 > p3 and abs(p1 - p3) / p2 < 0.02:
             patterns.append("Head and Shoulders")
             neckline = (p1 + p3) / 2
@@ -416,8 +416,8 @@ def detect_chart_patterns(df):
             sl = pattern_sls["Head and Shoulders"]
             if not (current > tgt and current < sl):
                 patterns.remove("Head and Shoulders")
-                del pattern_targets["Head and Shoulders"]
-                del pattern_sls["Head and Shoulders"]
+                if "Head and Shoulders" in pattern_targets: del pattern_targets["Head and Shoulders"]
+                if "Head and Shoulders" in pattern_sls: del pattern_sls["Head and Shoulders"]
 
     if len(trough_indices) >= 3:
         t1_idx = trough_indices[-3]
@@ -436,8 +436,8 @@ def detect_chart_patterns(df):
             sl = pattern_sls["Triple Bottom"]
             if not (current < tgt and current > sl):
                 patterns.remove("Triple Bottom")
-                del pattern_targets["Triple Bottom"]
-                del pattern_sls["Triple Bottom"]
+                if "Triple Bottom" in pattern_targets: del pattern_targets["Triple Bottom"]
+                if "Triple Bottom" in pattern_sls: del pattern_sls["Triple Bottom"]
         if t2 < t1 and t2 < t3 and abs(t1 - t3) / abs(t2) < 0.02:
             patterns.append("Inverse Head and Shoulders")
             neckline = (t1 + t3) / 2
@@ -448,8 +448,8 @@ def detect_chart_patterns(df):
             sl = pattern_sls["Inverse Head and Shoulders"]
             if not (current < tgt and current > sl):
                 patterns.remove("Inverse Head and Shoulders")
-                del pattern_targets["Inverse Head and Shoulders"]
-                del pattern_sls["Inverse Head and Shoulders"]
+                if "Inverse Head and Shoulders" in pattern_targets: del pattern_targets["Inverse Head and Shoulders"]
+                if "Inverse Head and Shoulders" in pattern_sls: del pattern_sls["Inverse Head and Shoulders"]
 
     if len(peak_indices) >= 2 and len(trough_indices) >= 2:
         p1_idx = peak_indices[-2]
@@ -471,7 +471,7 @@ def detect_chart_patterns(df):
             tgt = pattern_targets["Ascending Triangle"]
             if not (current < tgt):
                 patterns.remove("Ascending Triangle")
-                del pattern_targets["Ascending Triangle"]
+                if "Ascending Triangle" in pattern_targets: del pattern_targets["Ascending Triangle"]
 
         if abs(t2 - t1) / df_close.mean() < 0.01 and p2 < p1:
             patterns.append("Descending Triangle")
@@ -480,7 +480,7 @@ def detect_chart_patterns(df):
             tgt = pattern_targets["Descending Triangle"]
             if not (current > tgt):
                 patterns.remove("Descending Triangle")
-                del pattern_targets["Descending Triangle"]
+                if "Descending Triangle" in pattern_targets: del pattern_targets["Descending Triangle"]
 
         if p2 < p1 and t2 > t1:
             patterns.append("Symmetrical Triangle")
@@ -497,8 +497,8 @@ def detect_chart_patterns(df):
                 sl = pattern_sls["Falling Wedge"]
                 if not (current < tgt and current > sl):
                     patterns.remove("Falling Wedge")
-                    del pattern_targets["Falling Wedge"]
-                    del pattern_sls["Falling Wedge"]
+                    if "Falling Wedge" in pattern_targets: del pattern_targets["Falling Wedge"]
+                    if "Falling Wedge" in pattern_sls: del pattern_sls["Falling Wedge"]
 
         if p2 > p1 and t2 > t1:
             if abs(slope_peak - slope_trough) < 0.001:
@@ -512,8 +512,8 @@ def detect_chart_patterns(df):
                 sl = pattern_sls["Rising Wedge"]
                 if not (current > tgt and current < sl):
                     patterns.remove("Rising Wedge")
-                    del pattern_targets["Rising Wedge"]
-                    del pattern_sls["Rising Wedge"]
+                    if "Rising Wedge" in pattern_targets: del pattern_targets["Rising Wedge"]
+                    if "Rising Wedge" in pattern_sls: del pattern_sls["Rising Wedge"]
 
     return patterns, pattern_targets, pattern_sls
 
@@ -537,19 +537,86 @@ class AnalysisEngine:
         return f"{pl:+.4f} ({pl_pct:.2f}%)", comment
 
     @staticmethod
-    def determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts):
-        trend, confidence, comment = AnalysisEngine.market_trend(df_ohlcv, df_24h)
+    def market_trend(df_ohlcv, df_24h, current_price):
+        close = df_ohlcv['close']
+        ema20 = compute_ema(close, 20).iloc[-1] if len(close) >= 20 else current_price
+        ma50 = compute_ma(close, 50).iloc[-1] if len(close) >= 50 else current_price
+        last_close = close.iloc[-1] if not close.empty else current_price
+
+        atr = compute_atr(df_ohlcv)
+        atr_pct = (atr / last_close * 100) if last_close != 0 else 0.0  # Normalize ATR to percentage
+
+        if not df_24h.empty:
+            price_24h_ago = df_24h['close'].iloc[-1]  # Oldest close (24h ago)
+            daily_move_pct = ((current_price - price_24h_ago) / price_24h_ago) * 100 if price_24h_ago != 0 else 0.0
+        else:
+            prev_close = close.iloc[-2] if len(close) > 1 else last_close
+            daily_move_pct = ((last_close - prev_close) / prev_close) * 100 if prev_close != 0 else 0.0
+
+        trend = "sideways"
+        confidence = 60
+        comment = "Market moving sideways."
+
+        # Dynamic thresholds based on ATR percentage
+        price_threshold_strong = atr_pct * 2.0  # Strong move threshold in %
+        price_threshold_weak = atr_pct * 1.0    # Weak move threshold in %
+
+        if daily_move_pct > price_threshold_strong and ema20 > ma50:
+            trend = "bullish"
+            confidence = 85
+            comment = f"Strong 24h up ({daily_move_pct:.2f}%) with bullish EMA."
+        elif daily_move_pct < -price_threshold_strong and ema20 < ma50:
+            trend = "bearish"
+            confidence = 85
+            comment = f"Strong 24h down ({daily_move_pct:.2f}%) with bearish EMA."
+        elif daily_move_pct > price_threshold_weak and ema20 > ma50:
+            trend = "bullish"
+            confidence = 70
+            comment = f"Mild 24h up ({daily_move_pct:.2f}%) with bullish EMA."
+        elif daily_move_pct < -price_threshold_weak and ema20 < ma50:
+            trend = "bearish"
+            confidence = 70
+            comment = f"Mild 24h down ({daily_move_pct:.2f}%) with bearish EMA."
+        elif ema20 > ma50 and last_close > ema20:
+            trend = "bullish"
+            confidence = 65
+            comment = "Price above EMA20, mild bullish bias."
+        elif ema20 < ma50 and last_close < ema20:
+            trend = "bearish"
+            confidence = 65
+            comment = "Price below EMA20, mild bearish bias."
+        elif daily_move_pct > 0:
+            trend = "possible reversal"
+            confidence = 60
+            comment = f"Upward 24h move ({daily_move_pct:.2f}%) against bearish EMA."
+        elif daily_move_pct < 0:
+            trend = "possible reversal"
+            confidence = 60
+            comment = f"Downward 24h move ({daily_move_pct:.2f}%) against bullish EMA."
+
+        return trend, confidence, comment, daily_move_pct
+
+    @staticmethod
+    def determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts, current_price):
+        trend, confidence, comment, daily_move_pct = AnalysisEngine.market_trend(df_ohlcv, df_24h, current_price)
         rsi = compute_rsi(df_ohlcv['close'])
         macd, signal, hist = compute_macd(df_ohlcv['close'])
 
         bullish_score = 0
         bearish_score = 0
 
-        if trend in ["bullish", "possible reversal"] and "bullish" in comment.lower():
-            bullish_score += 2
-        elif trend in ["bearish", "possible reversal"] and "bearish" in comment.lower():
-            bearish_score += 2
+        # Price action and trend contribution
+        if trend == "bullish":
+            bullish_score += 3
+        elif trend == "bearish":
+            bearish_score += 3
+        elif trend == "possible reversal":
+            if daily_move_pct > 0:
+                bullish_score += 2
+            else:
+                bearish_score += 2
 
+        # Indicator contributions
         if rsi < 30:
             bullish_score += 1
         elif rsi > 70:
@@ -560,73 +627,30 @@ class AnalysisEngine:
         elif macd < signal and hist < 0:
             bearish_score += 1
 
+        # Pattern contributions
         bullish_pattern = any(p in AnalysisEngine.bullish_candles for p in detected_candles) or any(p in AnalysisEngine.bullish_charts for p in detected_charts)
         bearish_pattern = any(p in AnalysisEngine.bearish_candles for p in detected_candles) or any(p in AnalysisEngine.bearish_charts for p in detected_charts)
 
         if bullish_pattern:
-            bullish_score += 1
+            bullish_score += 2
         if bearish_pattern:
-            bearish_score += 1
+            bearish_score += 2
 
-        total_score = bullish_score + bearish_score
-        if total_score == 0:
-            long_conf = 50
-            short_conf = 50
+        total_score = max(bullish_score + bearish_score, 1)  # Avoid division by zero
+        long_conf = int((bullish_score / total_score) * 100)
+        short_conf = 100 - long_conf
+
+        if bullish_score > bearish_score:
+            dominant_bias = "long"
+            pattern_comment = "Dominant bullish trend detected."
+        elif bearish_score > bullish_score:
+            dominant_bias = "short"
+            pattern_comment = "Dominant bearish trend detected."
+        else:
             dominant_bias = "neutral"
-            pattern_comment = "Mixed signals; market is sideways/neutral."
-        else:
-            long_conf = int((bullish_score / total_score) * 100)
-            short_conf = 100 - long_conf
-            if bullish_score > bearish_score:
-                dominant_bias = "long"
-                pattern_comment = "Overall bullish trend detected."
-            elif bearish_score > bullish_score:
-                dominant_bias = "short"
-                pattern_comment = "Overall bearish trend detected."
-            else:
-                dominant_bias = "neutral"
-                pattern_comment = "Mixed signals; market is sideways/neutral."
+            pattern_comment = "Mixed signals; market is sideways."
 
-        return dominant_bias, long_conf, short_conf, pattern_comment + f" (Bullish score: {bullish_score}, Bearish score: {bearish_score})"
-
-    @staticmethod
-    def market_trend(df_ohlcv, df_24h):
-        close = df_ohlcv['close']
-        ema20 = compute_ema(close, 20).iloc[-1] if len(close) >= 20 else close.iloc[-1] if not close.empty else 0.0
-        ma50 = compute_ma(close, 50).iloc[-1] if len(close) >= 50 else close.iloc[-1] if not close.empty else 0.0
-        last_close = close.iloc[-1] if not close.empty else 0.0
-
-        if not df_24h.empty:
-            open_24h = df_24h['open'].iloc[0]
-            close_24h = df_24h['close'].iloc[-1]
-            daily_move_pct = ((close_24h - open_24h) / open_24h) * 100 if open_24h != 0 else 0.0
-        else:
-            prev_close = close.iloc[-2] if len(close) > 1 else last_close
-            daily_move_pct = ((last_close - prev_close) / prev_close) * 100 if prev_close != 0 else 0.0
-
-        trend = "sideways"
-        confidence = 60
-        comment = "Market moving sideways."
-
-        if daily_move_pct > 2 and ema20 > ma50:
-            trend = "bullish"
-            confidence = 85
-            comment = "EMA and 24h move bullish, momentum strong."
-        elif daily_move_pct < -2 and ema20 < ma50:
-            trend = "bearish"
-            confidence = 85
-            comment = "EMA and 24h move bearish, momentum strong."
-        else:
-            if ema20 < ma50 and daily_move_pct > 0:
-                trend = "possible reversal"
-                confidence = 70
-                comment = "Indicators bearish but price moves bullish - possible reversal."
-            if ema20 > ma50 and daily_move_pct < 0:
-                trend = "possible reversal"
-                confidence = 70
-                comment = "Indicators bullish but price drops - possible reversal."
-
-        return trend, confidence, comment
+        return dominant_bias, long_conf, short_conf, pattern_comment + f" (Bullish: {bullish_score}, Bearish: {bearish_score})"
 
     @staticmethod
     def adjust_based_on_patterns(dominant_bias, detected_candles, detected_charts, trend_conf, df_ohlcv, atr):
@@ -656,20 +680,20 @@ class AnalysisEngine:
             if is_bullish_pattern:
                 multiplier = 1.5
                 extra_conf = 10
-                pattern_comment += " Bullish patterns detected, extending target range and increasing confidence."
+                pattern_comment += " Bullish patterns detected, extending target range."
             elif is_bearish_pattern:
                 multiplier = 0.5
                 extra_conf = -10
-                pattern_comment += " Bearish patterns detected, tightening range and decreasing confidence."
+                pattern_comment += " Bearish patterns detected, tightening range."
         elif dominant_bias == "short":
             if is_bearish_pattern:
                 multiplier = 1.5
                 extra_conf = 10
-                pattern_comment += " Bearish patterns detected, extending target range and increasing confidence."
+                pattern_comment += " Bearish patterns detected, extending target range."
             elif is_bullish_pattern:
                 multiplier = 0.5
                 extra_conf = -10
-                pattern_comment += " Bullish patterns detected, tightening range and decreasing confidence."
+                pattern_comment += " Bullish patterns detected, tightening range."
         else:
             multiplier = 0.75
             extra_conf = -5
@@ -686,8 +710,8 @@ class AnalysisEngine:
         _, timeframe_multiplier = get_interval_mapping(timeframe)  # Access timeframe from outer scope
 
         if dominant_bias == "long":
-            potential_tgts = sorted([r for r in resistances if r > current_price])  # Changed to > current_price
-            potential_sls = sorted([s for s in supports if s < current_price], reverse=True)  # < current_price
+            potential_tgts = [r for r in resistances if r > current_price and r != 0]  # Ensure non-zero
+            potential_sls = [s for s in supports if s < current_price and s != 0]  # Ensure non-zero
             if potential_tgts:
                 tgt1 = potential_tgts[0]
                 targets.append(tgt1)
@@ -697,7 +721,7 @@ class AnalysisEngine:
                     if len(targets) >= 2:
                         break
             else:
-                tgt1 = current_price + atr * 2.5 * timeframe_multiplier * adjustment  # Changed to current_price
+                tgt1 = current_price + atr * 2.5 * timeframe_multiplier * adjustment
                 targets.append(tgt1)
                 tgt2 = current_price + atr * 5 * timeframe_multiplier * adjustment
                 targets.append(tgt2)
@@ -710,19 +734,19 @@ class AnalysisEngine:
                     if len(stoplosses) >= 2:
                         break
             else:
-                sl1 = current_price - atr * 1.5 * timeframe_multiplier * adjustment  # Changed to current_price
+                sl1 = current_price - atr * 1.5 * timeframe_multiplier * adjustment
                 stoplosses.append(sl1)
             for pat, ptgt in pattern_targets.items():
-                if pat in AnalysisEngine.bullish_charts and ptgt > current_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):  # Changed to > current_price
+                if pat in AnalysisEngine.bullish_charts and ptgt > current_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
                     if len(targets) < 3:
                         targets.append(ptgt)
             for pat, psl in pattern_sls.items():
-                if pat in AnalysisEngine.bullish_charts and psl < current_price and (not stoplosses or abs(psl - stoplosses[-1]) > atr / 2):  # < current_price
+                if pat in AnalysisEngine.bullish_charts and psl < current_price and (not stoplosses or abs(psl - stoplosses[-1]) > atr / 2):
                     if len(stoplosses) < 3:
                         stoplosses.append(psl)
         elif dominant_bias == "short":
-            potential_tgts = sorted([s for s in supports if s < current_price], reverse=True)  # Changed to < current_price, reverse=True for highest first (closest)
-            potential_sls = sorted([r for r in resistances if r > current_price])  # > current_price
+            potential_tgts = [s for s in supports if s < current_price and s != 0]  # Ensure non-zero
+            potential_sls = [r for r in resistances if r > current_price and r != 0]  # Ensure non-zero
             if potential_tgts:
                 tgt1 = potential_tgts[0]
                 targets.append(tgt1)
@@ -732,7 +756,7 @@ class AnalysisEngine:
                     if len(targets) >= 2:
                         break
             else:
-                tgt1 = current_price - atr * 2.5 * timeframe_multiplier * adjustment  # Changed to current_price
+                tgt1 = current_price - atr * 2.5 * timeframe_multiplier * adjustment
                 targets.append(tgt1)
                 tgt2 = current_price - atr * 5 * timeframe_multiplier * adjustment
                 targets.append(tgt2)
@@ -745,19 +769,19 @@ class AnalysisEngine:
                     if len(stoplosses) >= 2:
                         break
             else:
-                sl1 = current_price + atr * 1.5 * timeframe_multiplier * adjustment  # Changed to current_price
+                sl1 = current_price + atr * 1.5 * timeframe_multiplier * adjustment
                 stoplosses.append(sl1)
             for pat, ptgt in pattern_targets.items():
-                if pat in AnalysisEngine.bearish_charts and ptgt < current_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):  # < current_price
+                if pat in AnalysisEngine.bearish_charts and ptgt < current_price and (not targets or abs(ptgt - targets[-1]) > atr / 2):
                     if len(targets) < 3:
                         targets.append(ptgt)
             for pat, psl in pattern_sls.items():
-                if pat in AnalysisEngine.bearish_charts and psl > current_price and (not stoplosses or abs(psl - stoplosses[-1]) > atr / 2):  # > current_price
+                if pat in AnalysisEngine.bearish_charts and psl > current_price and (not stoplosses or abs(psl - stoplosses[-1]) > atr / 2):
                     if len(stoplosses) < 3:
                         stoplosses.append(psl)
         else:
-            nearest_support = min(supports, key=lambda s: abs(s - current_price)) if supports else current_price - atr
-            nearest_resistance = min(resistances, key=lambda r: abs(r - current_price)) if resistances else current_price + atr
+            nearest_support = min(supports, key=lambda s: abs(s - current_price), default=current_price - atr)
+            nearest_resistance = min(resistances, key=lambda r: abs(r - current_price), default=current_price + atr)
             targets = [nearest_resistance] if nearest_resistance > current_price else [nearest_support]
             stoplosses = [nearest_support] if nearest_support < current_price else [nearest_resistance]
 
@@ -769,15 +793,11 @@ class AnalysisEngine:
         if dominant_bias == "long":
             user_sl_raw = entry_price * (1 - risk_pct)
             close_levels = [s for s in supports if abs(s - user_sl_raw) < tol and s < entry_price]
-            if close_levels:
-                return max(close_levels)
-            return user_sl_raw
+            return max(close_levels, default=user_sl_raw)
         elif dominant_bias == "short":
             user_sl_raw = entry_price * (1 + risk_pct)
             close_levels = [r for r in resistances if abs(r - user_sl_raw) < tol and r > entry_price]
-            if close_levels:
-                return min(close_levels)
-            return user_sl_raw
+            return min(close_levels, default=user_sl_raw)
         else:
             return entry_price * (1 - 0.01)
 
@@ -814,10 +834,9 @@ def advisory_pipeline(client, input_json):
     detected_candles = detect_candlestick_patterns(df_ohlcv)
     detected_charts, pattern_targets, pattern_sls = detect_chart_patterns(df_ohlcv)
 
-    # Filter chart patterns to match dominant bias (determined later, but filter after)
     profit_loss, profit_comment = AnalysisEngine.profitability(data["position_type"], data["entry_price"], current_price, data["quantity"])
-    trend, trend_conf, trend_comment = AnalysisEngine.market_trend(df_ohlcv, df_24h)
-    dominant_bias, long_conf, short_conf, trend_pattern_comment = AnalysisEngine.determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts)
+    trend, confidence, comment, _ = AnalysisEngine.market_trend(df_ohlcv, df_24h, current_price)
+    dominant_bias, long_conf, short_conf, trend_pattern_comment = AnalysisEngine.determine_dominant_trend(df_ohlcv, df_24h, detected_candles, detected_charts, current_price)
 
     if data["has_both_positions"]:
         analysis_bias = dominant_bias
@@ -833,9 +852,8 @@ def advisory_pipeline(client, input_json):
         detected_charts = [p for p in detected_charts if p in AnalysisEngine.bullish_charts]
     elif dominant_bias == "short":
         detected_charts = [p for p in detected_charts if p in AnalysisEngine.bearish_charts]
-    # Neutral: keep all
 
-    multiplier, extra_conf, pattern_comment = AnalysisEngine.adjust_based_on_patterns(analysis_bias, detected_candles, detected_charts, trend_conf, df_ohlcv, atr)
+    multiplier, extra_conf, pattern_comment = AnalysisEngine.adjust_based_on_patterns(analysis_bias, detected_candles, detected_charts, confidence, df_ohlcv, atr)
     tol = atr * 0.5
     supports, resistances = detect_support_resistance(df_ohlcv, current_price, data["entry_price"], tol=tol)
     max_diff = atr * 5
@@ -856,7 +874,7 @@ def advisory_pipeline(client, input_json):
         "market_trend": trend,
         "dominant_bias": dominant_bias,
         "confidence_meter": {"long": long_conf, "short": short_conf},
-        "trend_comment": trend_comment + " " + trend_pattern_comment + " " + pattern_comment,
+        "trend_comment": comment + " " + trend_pattern_comment + " " + pattern_comment,
         "support_levels": supports,
         "resistance_levels": resistances,
         "detected_patterns": {
@@ -881,7 +899,7 @@ class TradeInput(BaseModel):
     position_type: str
     timeframe: str
     has_both_positions: Optional[bool] = False
-    risk_pct: Optional[float] = 0.02  # Added configurable risk percentage
+    risk_pct: Optional[float] = 0.02
 
 @app.get("/")
 async def root():
