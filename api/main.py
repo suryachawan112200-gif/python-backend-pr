@@ -708,10 +708,11 @@ class AnalysisEngine:
         trend_strength = abs((compute_ema(df_ohlcv['close'], 20).iloc[-1] - compute_ma(df_ohlcv['close'], 50).iloc[-1]) / compute_ma(df_ohlcv['close'], 50).iloc[-1]) if df_ohlcv is not None and compute_ma(df_ohlcv['close'], 50).iloc[-1] != 0 else 0.0
         adjustment = 1.0 + trend_strength * 2  # Stronger trend = wider range
         _, timeframe_multiplier = get_interval_mapping(timeframe)  # Access timeframe from outer scope
+        min_separation = atr * 0.5  # Minimum separation to avoid milli-point levels
 
         if dominant_bias == "long":
-            potential_tgts = [r for r in resistances if r > current_price and r != 0]  # Ensure non-zero
-            potential_sls = [s for s in supports if s < current_price and s != 0]  # Ensure non-zero
+            potential_tgts = [r for r in resistances if r > current_price + min_separation and r != 0]  # Ensure non-zero and min separation
+            potential_sls = [s for s in supports if s < current_price - min_separation and s != 0]  # Ensure non-zero and min separation
             if potential_tgts:
                 tgt1 = potential_tgts[0]
                 targets.append(tgt1)
@@ -745,8 +746,8 @@ class AnalysisEngine:
                     if len(stoplosses) < 3:
                         stoplosses.append(psl)
         elif dominant_bias == "short":
-            potential_tgts = [s for s in supports if s < current_price and s != 0]  # Ensure non-zero
-            potential_sls = [r for r in resistances if r > current_price and r != 0]  # Ensure non-zero
+            potential_tgts = [s for s in supports if s < current_price - min_separation and s != 0]  # Ensure non-zero and min separation
+            potential_sls = [r for r in resistances if r > current_price + min_separation and r != 0]  # Ensure non-zero and min separation
             if potential_tgts:
                 tgt1 = potential_tgts[0]
                 targets.append(tgt1)
