@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 import time
 import os
 import logging
+from collections import defaultdict
+from datetime import date
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +31,13 @@ app.add_middleware(
 # Bybit Mainnet API keys from environment variables
 API_KEY = os.environ.get("BYBIT_API_KEY")
 API_SECRET = os.environ.get("BYBIT_API_SECRET")
+
+# Login codes
+LOGIN_CODES = ["AIVISOR1", "AIVISOR2", "AIVISOR3", "AIVISOR4", "AIVISOR5", "AIVISOR6"]
+
+# In-memory storage for usage tracking (note: resets on app restart)
+daily_usage = defaultdict(lambda: {"count": 0, "last_date": None})
+daily_codes_used = defaultdict(set)
 
 # Input & Validation
 class InputValidator:
@@ -237,6 +246,7 @@ def compute_macd(series, fast=12, slow=26, signal=9):
     signal_line = compute_ema(macd, signal)
     histogram = macd - signal_line
     return (macd.iloc[-1], signal_line.iloc[-1], histogram.iloc[-1]) if len(macd) >= signal else (0.0, 0.0, 0.0)
+
 def compute_pivot_points(df, period=50):
     if len(df) < 1:
         return [], [], 0.0
@@ -955,10 +965,10 @@ class AnalysisEngine:
 
 # Main Pipeline
 def advisory_pipeline(client, input_json):
-    global timeframe
     try:
         data = InputValidator.validate_and_normalize(input_json)
-        timeframe = data["timeframe"]
+        # Force timeframe to 4h for all analyses
+        data["timeframe"] = "4h"
         logger.info(f"Processing input: {data}")
 
         # Validate coin symbol
@@ -1051,6 +1061,7 @@ class TradeInput(BaseModel):
     timeframe: str
     has_both_positions: Optional[bool] = False
     risk_pct: Optional[float] = 0.02
+    code: Optional[str] = None
 
 @app.get("/")
 async def root():
@@ -1069,9 +1080,30 @@ async def options_analyze(request: Request):
 
 @app.post("/analyze")
 async def analyze_position(input_data: TradeInput, request: Request):
+    ip = request.client.host
+    today = date.today()
+
+    # Check and reset daily usage if new day
+    if daily_usage[ip]["last_date"] != today:
+        daily_usage[ip] = {"count": 0, "last_date": today}
+
+    # Check if free analyses are available
+    if daily_usage[ip]["count"] < 2:
+        daily_usage[ip]["count"] += 1
+    else:
+        code = input_data.code
+        if not code:
+            raise HTTPException(status_code=403, detail="Require login code for more analyses today")
+        if code not in LOGIN_CODES:
+            raise HTTPException(status_code=403, detail="Invalid code")
+        if code in daily_codes_used[today]:
+            raise HTTPException(status_code=403, detail="Code already used today")
+        daily_codes_used[today].add(code)
+        # Allow the analysis, no increment to count as it's code-based
+
     try:
         client = initialize_client()
-        data = input_data.dict()
+        data = input_data.dict(exclude={"code"})  # Exclude code from data
         validated_data = InputValidator.validate_and_normalize(data)
         output = advisory_pipeline(client, validated_data)
         return output
