@@ -4,14 +4,15 @@ from pybit.unified_trading import HTTP
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import time
 import os
 import logging
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta
+import uuid
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -32,12 +33,13 @@ app.add_middleware(
 API_KEY = os.environ.get("BYBIT_API_KEY")
 API_SECRET = os.environ.get("BYBIT_API_SECRET")
 
-# Login codes
+# Login codes (hardcoded for testing)
 LOGIN_CODES = ["AIVISOR1", "AIVISOR2", "AIVISOR3", "AIVISOR4", "AIVISOR5", "AIVISOR6"]
 
-# In-memory storage for usage tracking (note: resets on app restart)
+# In-memory storage for usage tracking and paid codes
 daily_usage = defaultdict(lambda: {"count": 0, "last_date": None})
 daily_codes_used = defaultdict(set)
+valid_codes = {}  # {code: {"expiry": timestamp_ms, "last_used": date_str}}
 
 # Input & Validation
 class InputValidator:
@@ -557,30 +559,52 @@ def detect_chart_patterns(df):
             patterns.append("Ascending Triangle")
             height = p1 - t1
             pattern_targets["Ascending Triangle"] = p2 + height
+            pattern_sls["Ascending Triangle"] = min(t1, t2) - height * 0.1
             tgt = pattern_targets["Ascending Triangle"]
             if not (current < tgt):
                 patterns.remove("Ascending Triangle")
                 del pattern_targets["Ascending Triangle"]
+                del pattern_sls["Ascending Triangle"]
 
         if abs(t2 - t1) / df_close.mean() < 0.01 and p2 < p1 and p2_idx > p1_idx and t2_idx > t1_idx:
             patterns.append("Descending Triangle")
             height = p1 - t1
             pattern_targets["Descending Triangle"] = t2 - height
+            pattern_sls["Descending Triangle"] = max(p1, p2) + height * 0.1
             tgt = pattern_targets["Descending Triangle"]
             if not (current > tgt):
                 patterns.remove("Descending Triangle")
                 del pattern_targets["Descending Triangle"]
+                del pattern_sls["Descending Triangle"]
 
         if p2 < p1 and t2 > t1 and p2_idx > p1_idx and t2_idx > t1_idx:
             patterns.append("Symmetrical Triangle")
+            height = max(p1, p2) - min(t1, t2)
+            pattern_targets["Symmetrical Triangle"] = current + height if current > (p1 + t1) / 2 else current - height
+            pattern_sls["Symmetrical Triangle"] = min(t1, t2) - height * 0.1
+            tgt = pattern_targets["Symmetrical Triangle"]
+            sl = pattern_sls["Symmetrical Triangle"]
+            if not (current > sl and (tgt > current or tgt < current)):
+                patterns.remove("Symmetrical Triangle")
+                del pattern_targets["Symmetrical Triangle"]
+                del pattern_sls["Symmetrical Triangle"]
 
         if p2 < p1 and t2 < t1 and p2_idx > p1_idx and t2_idx > t1_idx:
             if abs(slope_peak - slope_trough) < 0.001:
                 patterns.append("Descending Channel")
+                height = p1 - t1
+                pattern_targets["Descending Channel"] = current - height
+                pattern_sls["Descending Channel"] = max(p1, p2) + height * 0.1
+                tgt = pattern_targets["Descending Channel"]
+                sl = pattern_sls["Descending Channel"]
+                if not (current > tgt):
+                    patterns.remove("Descending Channel")
+                    del pattern_targets["Descending Channel"]
+                    del pattern_sls["Descending Channel"]
             elif p1 - t1 > p2 - t2:
                 patterns.append("Falling Wedge")
                 height = p1 - t1
-                pattern_targets["Falling Wedge"] = df_close.iloc[-1] + height
+                pattern_targets["Falling Wedge"] = current + height
                 pattern_sls["Falling Wedge"] = min(t1, t2) - height * 0.1
                 tgt = pattern_targets["Falling Wedge"]
                 sl = pattern_sls["Falling Wedge"]
@@ -592,10 +616,19 @@ def detect_chart_patterns(df):
         if p2 > p1 and t2 > t1 and p2_idx > p1_idx and t2_idx > t1_idx:
             if abs(slope_peak - slope_trough) < 0.001:
                 patterns.append("Ascending Channel")
+                height = p1 - t1
+                pattern_targets["Ascending Channel"] = current + height
+                pattern_sls["Ascending Channel"] = min(t1, t2) - height * 0.1
+                tgt = pattern_targets["Ascending Channel"]
+                sl = pattern_sls["Ascending Channel"]
+                if not (current < tgt):
+                    patterns.remove("Ascending Channel")
+                    del pattern_targets["Ascending Channel"]
+                    del pattern_sls["Ascending Channel"]
             elif p2 - t2 < p1 - t1:
                 patterns.append("Rising Wedge")
                 height = p1 - t1
-                pattern_targets["Rising Wedge"] = df_close.iloc[-1] - height
+                pattern_targets["Rising Wedge"] = current - height
                 pattern_sls["Rising Wedge"] = max(p1, p2) + height * 0.1
                 tgt = pattern_targets["Rising Wedge"]
                 sl = pattern_sls["Rising Wedge"]
@@ -695,7 +728,7 @@ class AnalysisEngine:
 
         if macd > signal and hist > 0:
             bullish_score += 1.5
-        elif macd < signal and hist < 0 and abs(hist) > 0.001:  # Ignore weak MACD signals
+        elif macd < signal and hist < 0 and abs(hist) > 0.001:
             bearish_score += 1.5
 
         bullish_candle_count = sum(1 for p in detected_candles if p in AnalysisEngine.bullish_candles)
@@ -789,15 +822,15 @@ class AnalysisEngine:
 
         if dominant_bias == "long":
             if is_bullish_pattern:
-                multiplier = 2.0  # Increase for stronger bullish momentum
+                multiplier = 2.0
                 extra_conf = 15
                 pattern_comment += " Bullish patterns detected, extending target range and increasing confidence."
             elif is_bearish_pattern:
-                multiplier = 0.75  # Tighten range for conflicting signals
+                multiplier = 0.75
                 extra_conf = -5
                 pattern_comment += " Bearish patterns detected, tightening range and decreasing confidence."
             else:
-                multiplier = 1.5  # Moderate extension for bullish bias without patterns
+                multiplier = 1.5
                 extra_conf = 10
                 pattern_comment += " No strong patterns, moderately extending range for bullish bias."
         elif dominant_bias == "short":
@@ -822,14 +855,14 @@ class AnalysisEngine:
         return multiplier, extra_conf, pattern_comment
 
     @staticmethod
-    def target_stoploss(dominant_bias, supports, resistances, entry_price, pattern_targets, pattern_sls, atr, current_price, max_diff=100, df_ohlcv=None):
+    def target_stoploss(dominant_bias, supports, resistances, entry_price, pattern_targets, pattern_sls, atr, current_price, timeframe, max_diff=100, df_ohlcv=None):
         targets = []
         stoplosses = []
         trend_strength = abs((compute_ema(df_ohlcv['close'], 20).iloc[-1] - compute_ma(df_ohlcv['close'], 50).iloc[-1]) / compute_ma(df_ohlcv['close'], 50).iloc[-1]) if df_ohlcv is not None and not df_ohlcv.empty and compute_ma(df_ohlcv['close'], 50).iloc[-1] != 0 else 0.0
         adjustment = 1.0 + trend_strength * 2
         _, timeframe_multiplier, _ = get_interval_mapping(timeframe)
-        atr_buffer = atr * 0.5  # Buffer for nearest support/resistance
-        max_diff = max(atr * 10, max_diff)  # Dynamic max_diff based on ATR
+        atr_buffer = atr * 0.5
+        max_diff = max(atr * 10, max_diff)
 
         logger.info(f"Calculating targets/stoplosses: ATR = {atr:.6f}, Trend strength = {trend_strength:.2f}, Timeframe multiplier = {timeframe_multiplier}, Max diff = {max_diff:.6f}")
 
@@ -837,7 +870,7 @@ class AnalysisEngine:
             potential_tgts = sorted([r for r in resistances if r > current_price])
             potential_sls = sorted([s for s in supports if s < current_price], reverse=True)
             if potential_tgts:
-                tgt1 = potential_tgts[0] + atr_buffer  # Add buffer to nearest resistance
+                tgt1 = potential_tgts[0] + atr_buffer
                 targets.append(tgt1)
                 for t in potential_tgts[1:]:
                     if t - tgt1 <= max_diff * timeframe_multiplier * adjustment:
@@ -852,7 +885,7 @@ class AnalysisEngine:
                 targets.append(tgt2)
                 logger.info(f"Long bias: No resistances, using ATR-based targets {targets}")
             if potential_sls:
-                sl1 = potential_sls[0] - atr_buffer  # Add buffer to nearest support
+                sl1 = potential_sls[0] - atr_buffer
                 stoplosses.append(sl1)
                 for s in potential_sls[1:]:
                     if sl1 - s <= max_diff * timeframe_multiplier * adjustment:
@@ -1011,7 +1044,9 @@ def advisory_pipeline(client, input_json):
         tol = atr * 0.5
         supports, resistances = detect_support_resistance(df_ohlcv, current_price, data["entry_price"], tol=tol)
         max_diff = atr * 5
-        targets, stoplosses = AnalysisEngine.target_stoploss(analysis_bias, supports, resistances, data["entry_price"], pattern_targets, pattern_sls, atr, current_price, max_diff=max_diff, df_ohlcv=df_ohlcv)
+        targets, stoplosses = AnalysisEngine.target_stoploss(
+            analysis_bias, supports, resistances, data["entry_price"], pattern_targets, pattern_sls, atr, current_price, data["timeframe"], max_diff=max_diff, df_ohlcv=df_ohlcv
+        )
         user_sl = AnalysisEngine.calculate_user_sl(analysis_bias, data["entry_price"], supports, resistances, atr, data["risk_pct"])
         rr_ratios = AnalysisEngine.calculate_rr_ratios(analysis_bias, data["entry_price"], targets, user_sl)
 
@@ -1042,6 +1077,8 @@ def advisory_pipeline(client, input_json):
             "recommended_action": recommended_action,
             "warning": warning
         }
+        if data.get("name"):
+            output["user_name"] = data["name"]
         logger.info(f"Analysis output: {output}")
         return output
     except ValueError as ve:
@@ -1062,6 +1099,12 @@ class TradeInput(BaseModel):
     has_both_positions: Optional[bool] = False
     risk_pct: Optional[float] = 0.02
     code: Optional[str] = None
+    name: Optional[str] = None
+
+# Payment Input Model
+class PaymentInput(BaseModel):
+    wallet_address: str
+    amount_usd: float
 
 @app.get("/")
 async def root():
@@ -1086,6 +1129,7 @@ async def analyze_position(input_data: TradeInput, request: Request):
     # Check and reset daily usage if new day
     if daily_usage[ip]["last_date"] != today:
         daily_usage[ip] = {"count": 0, "last_date": today}
+        daily_codes_used[today].clear()
 
     # Check if free analyses are available
     if daily_usage[ip]["count"] < 2:
@@ -1093,17 +1137,26 @@ async def analyze_position(input_data: TradeInput, request: Request):
     else:
         code = input_data.code
         if not code:
-            raise HTTPException(status_code=403, detail="Require login code for more analyses today")
-        if code not in LOGIN_CODES:
-            raise HTTPException(status_code=403, detail="Invalid code")
-        if code in daily_codes_used[today]:
-            raise HTTPException(status_code=403, detail="Code already used today")
-        daily_codes_used[today].add(code)
-        # Allow the analysis, no increment to count as it's code-based
+            logger.info(f"IP {ip} exceeded 2 free analyses, code required")
+            raise HTTPException(status_code=403, detail="Require login code: 2 free analyses per day exceeded")
+        if code not in LOGIN_CODES and code not in valid_codes:
+            logger.info(f"Invalid code {code} from IP {ip}")
+            raise HTTPException(status_code=403, detail="Invalid login code")
+        if code in valid_codes:
+            code_info = valid_codes[code]
+            current_time_ms = int(datetime.now().timestamp() * 1000)
+            if code_info["expiry"] < current_time_ms:
+                logger.info(f"Expired code {code} from IP {ip}")
+                raise HTTPException(status_code=403, detail="Login code expired")
+            last_used = datetime.fromisoformat(code_info["last_used"]).date() if code_info["last_used"] else None
+            if last_used == today:
+                logger.info(f"Code {code} already used today by IP {ip}")
+                raise HTTPException(status_code=403, detail="Code already used today")
+            valid_codes[code]["last_used"] = datetime.now().isoformat()
 
     try:
         client = initialize_client()
-        data = input_data.dict(exclude={"code"})  # Exclude code from data
+        data = input_data.dict(exclude={"code", "name"})  # Exclude code and name from analysis data
         validated_data = InputValidator.validate_and_normalize(data)
         output = advisory_pipeline(client, validated_data)
         return output
@@ -1113,3 +1166,23 @@ async def analyze_position(input_data: TradeInput, request: Request):
     except Exception as e:
         logger.error(f"Unexpected error in /analyze: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.post("/verify-payment")
+async def verify_payment(payment: PaymentInput):
+    try:
+        # Placeholder: Simulate payment verification
+        if not payment.wallet_address.startswith("bc1"):
+            raise HTTPException(status_code=400, detail="Invalid Bitcoin wallet address")
+        if payment.amount_usd != 10.0:
+            raise HTTPException(status_code=400, detail="Payment must be $10")
+
+        # Generate unique code
+        code = str(uuid.uuid4())
+        expiry = int((datetime.now() + timedelta(days=30)).timestamp() * 1000)
+        valid_codes[code] = {"expiry": expiry, "last_used": None}
+        logger.info(f"Generated code {code} for wallet {payment.wallet_address}")
+
+        return {"code": code, "expiry": expiry}
+    except Exception as e:
+        logger.error(f"Error in /verify-payment: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Payment verification failed: {str(e)}")
