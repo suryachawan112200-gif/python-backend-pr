@@ -1,4 +1,6 @@
 import json
+from fastapi import Response
+from starlette import status
 import random
 from pybit.unified_trading import HTTP
 import pandas as pd
@@ -1391,6 +1393,17 @@ async def advisory_pipeline(request: Request):
     except Exception as e:
         logger.error(f"Error in advisory_pipeline: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
+
+@app.get("/favicon.png", include_in_schema=False)
+async def favicon():
+    """
+    Returns a 204 No Content response for favicon requests
+    to prevent 404 errors in the logs.
+    """
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+
 
 
 # --- NEW: Unit Test / Backtest Script Example ---
