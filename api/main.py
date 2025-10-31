@@ -480,22 +480,27 @@ def detect_chart_patterns(df, tol=0.01):
     if df.empty:
         logger.warning("Empty DataFrame in detect_chart_patterns, returning empty patterns")
         return [], {}, {}
-    
+
     df_close = df['close']
     patterns = []
     pattern_targets = {}
     pattern_sls = {}
-    peak_indices = get_peak_indices(df_close)[-10:]
-    trough_indices = get_trough_indices(df_close)[-10:]
+    peak_indices = get_peak_indices(df_close)[-15:]  # More for complex patterns
+    trough_indices = get_trough_indices(df_close)[-15:]
     current = df_close.iloc[-1]
 
-    # Double Top/Bottom with tighter tol
-    if len(peak_indices) >= 2:
+    # Volume filter for confirmation (boost accuracy)
+    avg_vol = df['volume'].rolling(20).mean().iloc[-1]
+    current_vol = df['volume'].iloc[-1]
+    vol_confirm = current_vol > avg_vol * 1.2  # High vol for validity
+
+    # Double Top/Bottom (fixed logic – remove redundant, add vol)
+    if len(peak_indices) >= 2 and vol_confirm:
         p1_idx = peak_indices[-2]
         p2_idx = peak_indices[-1]
         p1 = df_close[p1_idx]
         p2 = df_close[p2_idx]
-        if abs(p1 - p2) / ((p1 + p2) / 2) < tol and p2_idx > p1_idx:
+        if abs(p1 - p2) / ((p1 + p2) / 2) < tol:
             slice_data = df_close[p1_idx:p2_idx]
             if not slice_data.empty:
                 patterns.append("Double Top")
@@ -503,19 +508,69 @@ def detect_chart_patterns(df, tol=0.01):
                 height = p1 - neckline
                 pattern_targets["Double Top"] = neckline - height
                 pattern_sls["Double Top"] = max(p1, p2) + height * 0.1
-                tgt = pattern_targets["Double Top"]
-                sl = pattern_sls["Double Top"]
-                if not (current > tgt and current < sl):
+                # Fixed: Confirm break neckline (bearish for Double Top)
+                if current < neckline:  # Break down = valid
+                    pass
+                else:
                     patterns.remove("Double Top")
                     del pattern_targets["Double Top"]
                     del pattern_sls["Double Top"]
 
-    # Similar for other patterns (omitted for brevity; apply same tol adjustment)
-    # ... (rest of detect_chart_patterns unchanged, but add tol param to conditions)
+    # Triple Top/Bottom
+    if len(peak_indices) >= 3 and vol_confirm:
+        p1 = df_close[peak_indices[-3]]
+        p2 = df_close[peak_indices[-2]]
+        p3 = df_close[peak_indices[-1]]
+        if abs(p1 - p2) < tol * p1 and abs(p2 - p3) < tol * p2:
+            patterns.append("Triple Top")
+            neckline = df_close[peak_indices[-3]:peak_indices[-1]].min()
+            height = p1 - neckline
+            pattern_targets["Triple Top"] = neckline - height
+            pattern_sls["Triple Top"] = max(p1, p2, p3) + height * 0.1
+
+    # Head and Shoulders / Inverse
+    if len(peak_indices) >= 3 and vol_confirm:
+        p1 = df_close[peak_indices[-3]]
+        p2 = df_close[peak_indices[-2]]
+        p3 = df_close[peak_indices[-1]]
+        if p2 > p1 and p2 > p3 and abs(p1 - p3) < tol * p2:
+            patterns.append("Head and Shoulders")
+            neckline = df_close[peak_indices[-3]:peak_indices[-1]].min()
+            height = p2 - neckline
+            pattern_targets["Head and Shoulders"] = neckline - height
+            pattern_sls["Head and Shoulders"] = p2 + height * 0.1
+
+    # Flag/Pennant (continuation)
+    if len(peak_indices) >= 3 and len(trough_indices) >= 3 and vol_confirm:
+        highs = df_close[peak_indices[-3:]]
+        lows = df_close[trough_indices[-3:]]
+        if highs.std() < highs.mean() * 0.02 and lows.std() < lows.mean() * 0.02:
+            patterns.append("Flag" if len(highs) < 5 else "Pennant")
+            height = highs.mean() - lows.mean()
+            pattern_targets["Flag"] = current + height * (1 if highs.iloc[-1] > highs.iloc[-2] else -1)
+            pattern_sls["Flag"] = current - height * 0.5
+
+    # Cup & Handle (bullish)
+    if len(peak_indices) >= 4 and len(trough_indices) >= 4 and vol_confirm:
+        troughs = df_close[trough_indices[-4:]]
+        peaks = df_close[peak_indices[-4:]]
+        if np.isclose(troughs.iloc[0], troughs.iloc[2], rtol=0.02) and np.isclose(peaks.iloc[0], peaks.iloc[3], rtol=0.02) and troughs.iloc[3] > troughs.iloc[1]:
+            patterns.append("Cup & Handle")
+            pattern_targets["Cup & Handle"] = peaks.iloc[3] + (peaks.iloc[3] - troughs.iloc[1])
+            pattern_sls["Cup & Handle"] = troughs.iloc[1] - (peaks.iloc[3] - troughs.iloc[1]) * 0.5
+
+    # Ascending/Descending Channel
+    if len(peak_indices) >= 4 and len(trough_indices) >= 4 and vol_confirm:
+        peak_slope = (df_close[peak_indices[-1]] - df_close[peak_indices[-4]]) / 3
+        trough_slope = (df_close[trough_indices[-1]] - df_close[trough_indices[-4]]) / 3
+        if abs(peak_slope - trough_slope) < 0.01:
+            patterns.append("Ascending Channel" if peak_slope > 0 else "Descending Channel")
+            height = df_close[peak_indices[-1]] - df_close[trough_indices[-1]]
+            pattern_targets["Ascending Channel"] = current + height * 1.5
+            pattern_sls["Ascending Channel"] = current - height * 0.5
 
     logger.info(f"Detected chart patterns: {patterns}")
     return patterns, pattern_targets, pattern_sls
-
 # Enhanced analyze_single_timeframe (add pattern vol filter, TF-tuned trend)
 def analyze_single_timeframe(df_input, current_price, entry_price, timeframe, quantity, position_type, client):
     coin = df_input['coin'].iloc[0] if not df_input.empty and 'coin' in df_input.columns else "BTCUSDT"
